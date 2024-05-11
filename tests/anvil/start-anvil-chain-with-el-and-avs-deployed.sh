@@ -28,11 +28,12 @@ trap 'cleanup $LINENO "$BASH_COMMAND"' EXIT
 # start an anvil instance in the background that has eigenlayer contracts deployed
 # we start anvil in the background so that we can run the below script
 source ../../.env
-anvil --load-state avs-and-eigenlayer-deployed-anvil-state.json --fork-url $SEPOLIA_RPC &
+# anvil --load-state avs-and-eigenlayer-deployed-anvil-state.json --fork-url $SEPOLIA_RPC &
+
+# FIXME: bug in latest foundry version, so we use this pinned version instead of latest
+start_anvil_docker_with_fork $parent_path/avs-and-eigenlayer-deployed-anvil-state.json ""
 
 sleep 8
-# FIXME: bug in latest foundry version, so we use this pinned version instead of latest
-#start_anvil_docker $parent_path/avs-and-eigenlayer-deployed-anvil-state.json ""
 
 cd ../../contracts
 # we need to restart the anvil chain at the correct block, otherwise the indexRegistry has a quorumUpdate at the block number
@@ -40,8 +41,8 @@ cd ../../contracts
 # so calling getOperatorListAtBlockNumber reverts because it thinks there are no quorums registered at block 0
 # advancing chain manually like this is a current hack until https://github.com/foundry-rs/foundry/issues/6679 is merged
 # also not that it doesn't really advance by the correct number of blocks.. not sure why, so we just forward by a bunch of blocks that should be enough
-#vforge script script/utils/Utils.sol --sig "advanceChainByNBlocks(uint256)" 100 --rpc-url $RPC_URL --private-key $PRIVATE_KEY --broadcast
+#forge script script/utils/Utils.sol --sig "resetBlockNumber(uint256)" 100 --rpc-url $RPC_URL --private-key $PRIVATE_KEY --broadcast
 echo "current block-number:" $(cast block-number)
 
 # Bring Anvil back to the foreground
-# docker attach anvil
+docker attach anvil

@@ -146,6 +146,9 @@ contract IncredibleSquaringDeployer is Script, Utils {
     ) internal {
         erc20Mock = new ERC20Mock();
         priceAdapter = new PriceFeedAdapter();
+        priceAdapter.addFeed("btc/usd", address(0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43));
+        // Add price feeds on sepholia
+
         // TODO(samlaf): any reason why we are using the strategybase with tvl limits instead of just using strategybase?
         // the maxPerDeposit and maxDeposits below are just arbitrary values.
         erc20MockStrategy = StrategyBaseTVLLimits(
