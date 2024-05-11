@@ -25,11 +25,11 @@ contract PriceFeedAdapter is Ownable {
         emit FeedRemoved(_symbol);
     }
 
-    function getLatestPrice(string memory _symbol, bool allowStale) external returns (int) {
+    function getLatestPrice(string memory _symbol) external returns (int) {
         AggregatorV3Interface feed = feeds[_symbol];
         require(address(feed) != address(0), "Feed not found.");
         (, int price,, uint256 updatedAt,) = feed.latestRoundData();
-        require(block.timestamp - updatedAt < 1 hours || allowStale, "Data is stale"); // Stale data check
+        require(block.timestamp - updatedAt < 1 hours, "Data is stale"); // Stale data check
         ChainlinkAdapterPrice = price;
         return price;
     }
