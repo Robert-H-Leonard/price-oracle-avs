@@ -1,16 +1,21 @@
 package operator
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"net"
+	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	priceFeedAdapter "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/PriceFeedAdapter"
 	"github.com/hashicorp/raft"
+	raftboltdb "github.com/hashicorp/raft-boltdb"
 )
 
 /*
@@ -37,6 +42,8 @@ type priceUpdateCommand struct {
 }
 
 type PriceFSM struct {
+	RaftDir   string // Directory for operator raft logs
+	RaftBind  string // host:port used by the operator for raft protocol
 	raft      *raft.Raft
 	mu        sync.Mutex
 	priceData map[string]int // past price data
@@ -45,7 +52,7 @@ type PriceFSM struct {
 	priceFeedAdapter *priceFeedAdapter.ContractPriceFeedAdapter
 }
 
-func New(feedAdapter *priceFeedAdapter.ContractPriceFeedAdapter) *PriceFSM {
+func NewConcensusFSM(feedAdapter *priceFeedAdapter.ContractPriceFeedAdapter) *PriceFSM {
 	return &PriceFSM{
 		priceData:        make(map[string]int),
 		logger:           log.New(os.Stderr, "[priceData] ", log.LstdFlags),
@@ -53,7 +60,77 @@ func New(feedAdapter *priceFeedAdapter.ContractPriceFeedAdapter) *PriceFSM {
 	}
 }
 
+func JoinExistingNetwork(joinAddr, raftAddr, nodeID string) error {
+	b, err := json.Marshal(map[string]string{"addr": raftAddr, "id": nodeID})
+	if err != nil {
+		return err
+	}
+	resp, err := http.Post(fmt.Sprintf("http://%s/join", joinAddr), "application-type/json", bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+// Operator initializes raft consenses server.
+// If enableSingle is set, and there are no existing peers,
+// then this node becomes the first node, and therefore leader, of the cluster.
+// localID should be the server identifier for this node.
 func (p *PriceFSM) Initialize(enableSingle bool, localId string) error {
+	// Setup Raft configuration.
+	config := raft.DefaultConfig()
+	config.LocalID = raft.ServerID(localId)
+
+	// Setup Raft communication.
+	addr, err := net.ResolveTCPAddr("tcp", p.RaftBind)
+	if err != nil {
+		return err
+	}
+	transport, err := raft.NewTCPTransport(p.RaftBind, addr, 3, 10*time.Second, os.Stderr)
+	if err != nil {
+		return err
+	}
+
+	// Create the snapshot store. This allows the Raft to truncate the log.
+	snapshots, err := raft.NewFileSnapshotStore(p.RaftDir, retainSnapshotCount, os.Stderr)
+	if err != nil {
+		return fmt.Errorf("file snapshot store: %s", err)
+	}
+
+	// Create the log store and stable store using BoltDB in memory key value store
+	var logStore raft.LogStore
+	var stableStore raft.StableStore
+
+	boltDB, err := raftboltdb.New(raftboltdb.Options{
+		Path: filepath.Join(p.RaftDir, "raft.db"),
+	})
+	if err != nil {
+		return fmt.Errorf("new bbolt store: %s", err)
+	}
+
+	logStore = boltDB
+	stableStore = boltDB
+
+	// Instantiate the Raft systems.
+	ra, err := raft.NewRaft(config, (*fsm)(p), logStore, stableStore, snapshots, transport)
+	if err != nil {
+		return fmt.Errorf("new raft: %s", err)
+	}
+	p.raft = ra
+
+	// If only node and not joining an existing raft network bootstrap the network
+	if enableSingle {
+		configuration := raft.Configuration{
+			Servers: []raft.Server{
+				{
+					ID:      config.LocalID,
+					Address: transport.LocalAddr(),
+				},
+			},
+		}
+		ra.BootstrapCluster(configuration)
+	}
 	return nil
 }
 

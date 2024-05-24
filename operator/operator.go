@@ -69,6 +69,8 @@ type Operator struct {
 	credibleSquaringServiceManagerAddr common.Address
 	// needed to fetch the price of assets on different on-chain oracle networks
 	priceFeedAdapter *priceFeedAdapter.ContractPriceFeedAdapter
+
+	priceFSM *PriceFSM
 }
 
 // TODO(samlaf): config is a mess right now, since the chainio client constructors
@@ -220,6 +222,29 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 		return nil, err
 	}
 
+	// setup raft consensus client
+	consensusFSM := NewConcensusFSM(priceFeedClient)
+	consensusFSM.RaftBind = c.RaftBindingURI
+	consensusFSM.RaftDir = c.RaftDirectoryPath
+
+	// initialize raft consensus
+	shouldBootstrapRaftNetwork := c.RaftJoinURI == ""
+	nodeId := c.OperatorAddress
+	consensusFSM.Initialize(shouldBootstrapRaftNetwork, nodeId)
+
+	// start http server with additional raft endpoints
+	h := NewService(c.HttpBindingURI, consensusFSM)
+	if err := h.Start(); err != nil {
+		logger.Error("failed to start HTTP service: %s", err.Error())
+	}
+
+	// If operator is joining an existing raft network make request to join
+	if !shouldBootstrapRaftNetwork {
+		if err := JoinExistingNetwork(c.RaftJoinURI, c.RaftBindingURI, nodeId); err != nil {
+			logger.Error("failed to join node at %s: %s", c.RaftJoinURI, err.Error())
+		}
+	}
+
 	operator := &Operator{
 		config:                             c,
 		logger:                             logger,
@@ -241,6 +266,7 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 		credibleSquaringServiceManagerAddr: common.HexToAddress(c.AVSRegistryCoordinatorAddress),
 		operatorId:                         [32]byte{0}, // this is set below
 		priceFeedAdapter:                   priceFeedClient,
+		priceFSM:                           consensusFSM,
 	}
 
 	if c.RegisterOperatorOnStartup {

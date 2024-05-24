@@ -43,3 +43,7 @@ register_operator_on_startup: true
 # address of token to deposit tokens into when registering on startup
 # addresses.erc20MockStrategy in tests/anvil/credible_squaring_avs_deployment_output.json
 token_strategy_addr: 0x67d269191c92Caf3cD7723F116c85e6E9bf55933
+
+raft_log_directory: config-files/operator-1
+operator_raft_uri: localhost:12001
+operator_http_uri: localhost:11001
