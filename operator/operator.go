@@ -67,7 +67,8 @@ type Operator struct {
 	aggregatorRpcClient AggregatorRpcClienter
 	// needed when opting in to avs (allow this service manager contract to slash operator)
 	credibleSquaringServiceManagerAddr common.Address
-	priceFeedAdapter                   *priceFeedAdapter.ContractPriceFeedAdapter
+	// needed to fetch the price of assets on different on-chain oracle networks
+	priceFeedAdapter *priceFeedAdapter.ContractPriceFeedAdapter
 }
 
 // TODO(samlaf): config is a mess right now, since the chainio client constructors
@@ -333,6 +334,11 @@ func (o *Operator) ProcessNewPriceUpdateCreatedLog(newPriceUpdateTaskCreatedLog 
 
 	// Return task response to either on-chain or off-chain aggregator
 
+	//// flow post raft
+	// 1 - Only the leader will respond by calling apply with this request
+	// 2 - Each operator responds via http + signature with answers
+	// 3 - Leader aggregates answers and validates
+
 	return ""
 }
 
@@ -370,3 +376,7 @@ func (o *Operator) SignTaskResponse(taskResponse *cstaskmanager.IIncredibleSquar
 	o.logger.Debug("Signed task response", "signedTaskResponse", signedTaskResponse)
 	return signedTaskResponse, nil
 }
+
+/*
+
+ */
