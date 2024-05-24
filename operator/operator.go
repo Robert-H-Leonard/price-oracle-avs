@@ -235,11 +235,13 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 	// start http server with additional raft endpoints
 	h := NewService(c.HttpBindingURI, consensusFSM)
 	if err := h.Start(); err != nil {
+		logger.Info("Starting http server")
 		logger.Error("failed to start HTTP service: %s", err.Error())
 	}
 
 	// If operator is joining an existing raft network make request to join
 	if !shouldBootstrapRaftNetwork {
+		logger.Info("Joining existing raft network")
 		if err := JoinExistingNetwork(c.RaftJoinURI, c.RaftBindingURI, nodeId); err != nil {
 			logger.Error("failed to join node at %s: %s", c.RaftJoinURI, err.Error())
 		}

@@ -36,6 +36,8 @@ func (s *Service) Start() error {
 		Handler: s,
 	}
 
+	log.Println("Initializing http server")
+
 	ln, err := net.Listen("tcp", s.addr)
 	if err != nil {
 		return err

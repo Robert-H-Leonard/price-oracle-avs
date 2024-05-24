@@ -61,6 +61,7 @@ func NewConcensusFSM(feedAdapter *priceFeedAdapter.ContractPriceFeedAdapter) *Pr
 }
 
 func JoinExistingNetwork(joinAddr, raftAddr, nodeID string) error {
+	log.Println("Joining raft network")
 	b, err := json.Marshal(map[string]string{"addr": raftAddr, "id": nodeID})
 	if err != nil {
 		return err
@@ -69,6 +70,8 @@ func JoinExistingNetwork(joinAddr, raftAddr, nodeID string) error {
 	if err != nil {
 		return err
 	}
+
+	log.Printf("Joined raft consensus through uri %s:", joinAddr)
 	defer resp.Body.Close()
 	return nil
 }
