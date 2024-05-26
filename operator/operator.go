@@ -383,36 +383,9 @@ func (o *Operator) ProcessNewPriceUpdateCreatedLog(newPriceUpdateTaskCreatedLog 
 		o.logger.Error("Failed to request task", "err", err)
 	}
 
+	// Leader sends request to follower operators
 	o.priceFSM.raft.Apply(dataBytes, raftTimeout)
 
 	o.logger.Info("Task request sent to followers")
-
-	//// flow post raft
-	// 1 - Only the leader will respond by calling apply with this request
-	// 2 - Each operator responds via http + signature with answers
-	// 3 - Leader aggregates answers and validates
 	return err
 }
-
-// Takes a NewTaskCreatedLog struct as input and returns a TaskResponseHeader struct.
-// The TaskResponseHeader struct is the struct that is signed and sent to the contract as a task response.
-func (o *Operator) ProcessNewTaskCreatedLog(newTaskCreatedLog *cstaskmanager.ContractIncredibleSquaringTaskManagerNewTaskCreated) *cstaskmanager.IIncredibleSquaringTaskManagerTaskResponse {
-	o.logger.Debug("Received new task", "task", newTaskCreatedLog)
-	o.logger.Info("Received new task",
-		"numberToBeSquared", newTaskCreatedLog.Task.NumberToBeSquared,
-		"taskIndex", newTaskCreatedLog.TaskIndex,
-		"taskCreatedBlock", newTaskCreatedLog.Task.TaskCreatedBlock,
-		"quorumNumbers", newTaskCreatedLog.Task.QuorumNumbers,
-		"QuorumThresholdPercentage", newTaskCreatedLog.Task.QuorumThresholdPercentage,
-	)
-	numberSquared := big.NewInt(0).Exp(newTaskCreatedLog.Task.NumberToBeSquared, big.NewInt(2), nil)
-	taskResponse := &cstaskmanager.IIncredibleSquaringTaskManagerTaskResponse{
-		ReferenceTaskIndex: newTaskCreatedLog.TaskIndex,
-		NumberSquared:      numberSquared,
-	}
-	return taskResponse
-}
-
-/*
-
- */

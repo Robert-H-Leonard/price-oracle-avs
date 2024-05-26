@@ -105,12 +105,6 @@ func (s *Service) handleJoin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handlePriceUpdateTaskSubmittion(w http.ResponseWriter, r *http.Request) {
-	// var body any
-
-	// if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-	// 	w.WriteHeader(http.StatusBadRequest)
-	// 	return
-	// }
 
 	m := map[string]string{}
 	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {

@@ -24,20 +24,6 @@ import (
 	raftboltdb "github.com/hashicorp/raft-boltdb"
 )
 
-/*
- 2 Modules:
-
- 1) Service - HTTP (or rpc) server that allows other nodes to join raft network
-	- Security need to enforce that requestor signs a message to verify operator (possibly a /verify endpoint to call)
-
- 2) Price FSM - Interface needed for raft consensus
-    - Apply, Snapshot and Restore
-	- Join handles new nodes (copy store from example)
-	- Initialize starts the node and has it try to join the network
-		- If first node then bootstrap cluster
-	- Consider triggering leaders to call apply requesting task data and task response will have price responses
-*/
-
 const (
 	retainSnapshotCount = 2
 	raftTimeout         = 10 * time.Second
@@ -94,22 +80,6 @@ func JoinExistingNetwork(joinAddr, raftAddr, nodeID string) error {
 func (p *PriceFSM) setOperatorId(id sdktypes.OperatorId) {
 	p.operatorId = id
 }
-
-// func (p *PriceFSM) SignResponse(response PriceUpdateTaskResponse) (*SignedTaskResponse, error) {
-// 	taskResponseHash, err := core.GetTaskResponseDigest(response.price)
-// 	if err != nil {
-// 		p.logger.Printf("Error getting task response header hash. skipping task (this is not expected and should be investigated)", "err", err)
-// 		return nil, err
-// 	}
-// 	blsSignature := p.blsKeypair.SignMessage(taskResponseHash)
-// 	signedTaskResponse := &SignedTaskResponse{
-// 		TaskResponse: response,
-// 		BlsSignature: *blsSignature,
-// 		OperatorId:   p.operatorId,
-// 	}
-// 	p.logger.Printf("Signed task response", "signedTaskResponse", signedTaskResponse)
-// 	return signedTaskResponse, nil
-// }
 
 // Operator initializes raft consenses server.
 // If enableSingle is set, and there are no existing peers,
