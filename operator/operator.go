@@ -2,6 +2,7 @@ package operator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"os"
@@ -10,10 +11,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/Layr-Labs/incredible-squaring-avs/aggregator"
 	cstaskmanager "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/IncredibleSquaringTaskManager"
 	priceFeedAdapter "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/PriceFeedAdapter"
-	"github.com/Layr-Labs/incredible-squaring-avs/core"
 	"github.com/Layr-Labs/incredible-squaring-avs/core/chainio"
 	"github.com/Layr-Labs/incredible-squaring-avs/metrics"
 	"github.com/Layr-Labs/incredible-squaring-avs/types"
@@ -71,6 +70,16 @@ type Operator struct {
 	priceFeedAdapter *priceFeedAdapter.ContractPriceFeedAdapter
 
 	priceFSM *PriceFSM
+}
+
+type PriceUpdateRequest struct {
+	FeedName  string
+	TaskId    uint32
+	LeaderUrl string
+}
+
+type PriceUpdateTaskResponse struct {
+	price *big.Int
 }
 
 // TODO(samlaf): config is a mess right now, since the chainio client constructors
@@ -223,9 +232,10 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 	}
 
 	// setup raft consensus client
-	consensusFSM := NewConcensusFSM(priceFeedClient)
+	consensusFSM := NewConcensusFSM(priceFeedClient, blsKeyPair)
 	consensusFSM.RaftBind = c.RaftBindingURI
 	consensusFSM.RaftDir = c.RaftDirectoryPath
+	consensusFSM.RaftHttpBind = c.HttpBindingURI
 
 	// initialize raft consensus
 	shouldBootstrapRaftNetwork := c.RaftJoinURI == ""
@@ -235,7 +245,6 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 	// start http server with additional raft endpoints
 	h := NewService(c.HttpBindingURI, consensusFSM)
 	if err := h.Start(); err != nil {
-		logger.Info("Starting http server")
 		logger.Error("failed to start HTTP service: %s", err.Error())
 	}
 
@@ -282,6 +291,7 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 		return nil, err
 	}
 	operator.operatorId = operatorId
+	operator.priceFSM.setOperatorId(operatorId)
 	logger.Info("Operator info",
 		"operatorId", operatorId,
 		"operatorAddr", c.OperatorAddress,
@@ -343,31 +353,45 @@ func (o *Operator) Start(ctx context.Context) error {
 	}
 }
 
-func (o *Operator) ProcessNewPriceUpdateCreatedLog(newPriceUpdateTaskCreatedLog *cstaskmanager.ContractIncredibleSquaringTaskManagerPriceUpdateRequested) string {
-	o.logger.Debug("Received new price updated", "task", newPriceUpdateTaskCreatedLog)
-	o.logger.Info("Received new price updated task",
+func (o *Operator) ProcessNewPriceUpdateCreatedLog(newPriceUpdateTaskCreatedLog *cstaskmanager.ContractIncredibleSquaringTaskManagerPriceUpdateRequested) error {
+	// If not leader ignore request
+	isLeader, _ := o.priceFSM.IsLeader()
+
+	if !isLeader {
+		o.logger.Info("Waiting for leader request for feed",
+			"feedName", string(newPriceUpdateTaskCreatedLog.Task.FeedName[:]),
+			"taskCreatedBlock", newPriceUpdateTaskCreatedLog.Task.TaskCreatedBlock,
+		)
+
+		return nil
+	}
+
+	o.logger.Info("Received new price updated task, sending request to followers",
 		"feedName", string(newPriceUpdateTaskCreatedLog.Task.FeedName[:]),
 		"taskCreatedBlock", newPriceUpdateTaskCreatedLog.Task.TaskCreatedBlock,
 	)
 
-	resolvedPrice, err := o.priceFeedAdapter.GetLatestPrice(&bind.CallOpts{}, string(newPriceUpdateTaskCreatedLog.Task.FeedName[:]))
-
-	if err != nil {
-		o.logger.Error("Failed to fetch price", "err", err)
+	data := &PriceUpdateRequest{
+		FeedName:  string(newPriceUpdateTaskCreatedLog.Task.FeedName[:]),
+		TaskId:    newPriceUpdateTaskCreatedLog.TaskIndex,
+		LeaderUrl: o.priceFSM.RaftHttpBind, // This is the url of the leader making the request
 	}
 
-	o.logger.Info("Price fetched is ", "resolvedPrice", resolvedPrice)
+	dataBytes, err := json.Marshal(data)
 
-	// fetch prices from on-chain feed
+	if err != nil {
+		o.logger.Error("Failed to request task", "err", err)
+	}
 
-	// Return task response to either on-chain or off-chain aggregator
+	o.priceFSM.raft.Apply(dataBytes, raftTimeout)
+
+	o.logger.Info("Task request sent to followers")
 
 	//// flow post raft
 	// 1 - Only the leader will respond by calling apply with this request
 	// 2 - Each operator responds via http + signature with answers
 	// 3 - Leader aggregates answers and validates
-
-	return ""
+	return err
 }
 
 // Takes a NewTaskCreatedLog struct as input and returns a TaskResponseHeader struct.
@@ -387,22 +411,6 @@ func (o *Operator) ProcessNewTaskCreatedLog(newTaskCreatedLog *cstaskmanager.Con
 		NumberSquared:      numberSquared,
 	}
 	return taskResponse
-}
-
-func (o *Operator) SignTaskResponse(taskResponse *cstaskmanager.IIncredibleSquaringTaskManagerTaskResponse) (*aggregator.SignedTaskResponse, error) {
-	taskResponseHash, err := core.GetTaskResponseDigest(taskResponse)
-	if err != nil {
-		o.logger.Error("Error getting task response header hash. skipping task (this is not expected and should be investigated)", "err", err)
-		return nil, err
-	}
-	blsSignature := o.blsKeypair.SignMessage(taskResponseHash)
-	signedTaskResponse := &aggregator.SignedTaskResponse{
-		TaskResponse: *taskResponse,
-		BlsSignature: *blsSignature,
-		OperatorId:   o.operatorId,
-	}
-	o.logger.Debug("Signed task response", "signedTaskResponse", signedTaskResponse)
-	return signedTaskResponse, nil
 }
 
 /*

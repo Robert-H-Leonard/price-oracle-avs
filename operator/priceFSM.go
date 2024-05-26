@@ -13,7 +13,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Layr-Labs/eigensdk-go/crypto/bls"
+	sdktypes "github.com/Layr-Labs/eigensdk-go/types"
 	priceFeedAdapter "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/PriceFeedAdapter"
+	"github.com/Layr-Labs/incredible-squaring-avs/core"
+
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+
 	"github.com/hashicorp/raft"
 	raftboltdb "github.com/hashicorp/raft-boltdb"
 )
@@ -41,27 +47,36 @@ type priceUpdateCommand struct {
 	FeedName string `json:"feedName"`
 }
 
-type PriceFSM struct {
-	RaftDir   string // Directory for operator raft logs
-	RaftBind  string // host:port used by the operator for raft protocol
-	raft      *raft.Raft
-	mu        sync.Mutex
-	priceData map[string]int // past price data
-	logger    *log.Logger
-	// needed to fetch the price of assets on different on-chain oracle networks
-	priceFeedAdapter *priceFeedAdapter.ContractPriceFeedAdapter
+type SignedTaskResponse struct {
+	TaskResponse PriceUpdateTaskResponse
+	BlsSignature bls.Signature
+	OperatorId   sdktypes.OperatorId
 }
 
-func NewConcensusFSM(feedAdapter *priceFeedAdapter.ContractPriceFeedAdapter) *PriceFSM {
+type PriceFSM struct {
+	RaftDir      string // Directory for operator raft logs
+	RaftBind     string // host:port used by the operator for raft protocol
+	RaftHttpBind string // host:port for custom server for custom raft logic
+	raft         *raft.Raft
+	mu           sync.Mutex
+	priceData    map[string]int // past price data
+	logger       *log.Logger
+	// needed to fetch the price of assets on different on-chain oracle networks
+	priceFeedAdapter *priceFeedAdapter.ContractPriceFeedAdapter
+	blsKeypair       *bls.KeyPair
+	operatorId       sdktypes.OperatorId
+}
+
+func NewConcensusFSM(feedAdapter *priceFeedAdapter.ContractPriceFeedAdapter, keyPair *bls.KeyPair) *PriceFSM {
 	return &PriceFSM{
 		priceData:        make(map[string]int),
 		logger:           log.New(os.Stderr, "[priceData] ", log.LstdFlags),
 		priceFeedAdapter: feedAdapter,
+		blsKeypair:       keyPair,
 	}
 }
 
 func JoinExistingNetwork(joinAddr, raftAddr, nodeID string) error {
-	log.Println("Joining raft network")
 	b, err := json.Marshal(map[string]string{"addr": raftAddr, "id": nodeID})
 	if err != nil {
 		return err
@@ -75,6 +90,26 @@ func JoinExistingNetwork(joinAddr, raftAddr, nodeID string) error {
 	defer resp.Body.Close()
 	return nil
 }
+
+func (p *PriceFSM) setOperatorId(id sdktypes.OperatorId) {
+	p.operatorId = id
+}
+
+// func (p *PriceFSM) SignResponse(response PriceUpdateTaskResponse) (*SignedTaskResponse, error) {
+// 	taskResponseHash, err := core.GetTaskResponseDigest(response.price)
+// 	if err != nil {
+// 		p.logger.Printf("Error getting task response header hash. skipping task (this is not expected and should be investigated)", "err", err)
+// 		return nil, err
+// 	}
+// 	blsSignature := p.blsKeypair.SignMessage(taskResponseHash)
+// 	signedTaskResponse := &SignedTaskResponse{
+// 		TaskResponse: response,
+// 		BlsSignature: *blsSignature,
+// 		OperatorId:   p.operatorId,
+// 	}
+// 	p.logger.Printf("Signed task response", "signedTaskResponse", signedTaskResponse)
+// 	return signedTaskResponse, nil
+// }
 
 // Operator initializes raft consenses server.
 // If enableSingle is set, and there are no existing peers,
@@ -174,6 +209,16 @@ func (p *PriceFSM) Join(nodeID, addr string) error {
 	return nil
 }
 
+func (p *PriceFSM) IsLeader() (bool, string) {
+	leaderURL, _ := p.raft.LeaderWithID()
+	p.logger.Printf("leader address read is %s and my addr is %s", leaderURL, p.RaftBind)
+	return string(leaderURL) == p.RaftBind, string(leaderURL)
+}
+
+func (p *PriceFSM) TriggerElection() {
+	p.raft.LeadershipTransfer()
+}
+
 type fsm PriceFSM
 
 type fsmSnapshot struct {
@@ -182,11 +227,61 @@ type fsmSnapshot struct {
 
 // Triggers operator to fetch the requested price feed and sumbit to leader
 func (f *fsm) Apply(l *raft.Log) interface{} {
-	// 1 - JSON parse log data and serialize to struct
-	// 2 - Look up leader and their http url
-	// 3 - Fetch price of feed from multiple sources
-	// 4 - Create task response
-	// 5 - Submit response to leader with BLS signature
+	lastAppliedIndex := f.raft.AppliedIndex()
+
+	if l.Index < lastAppliedIndex {
+		return nil // No need to replay previous logs
+	}
+
+	leaderURL, _ := f.raft.LeaderWithID()
+	isLeader := string(leaderURL) == f.RaftBind
+
+	if isLeader {
+		// Leader doesn't submit to themselves
+		return nil
+	}
+
+	var request PriceUpdateRequest
+	if err := json.Unmarshal(l.Data, &request); err != nil {
+		panic(fmt.Sprintf("failed to unmarshal command: %s", err.Error()))
+	}
+
+	resolvePrice, err := f.priceFeedAdapter.GetLatestPrice(&bind.CallOpts{}, request.FeedName)
+
+	if err != nil {
+		f.logger.Printf("Failed to fetch price", "err", err)
+		return nil
+	}
+
+	response := PriceUpdateTaskResponse{price: resolvePrice}
+
+	if err := f.SubmitTaskToLeader(request, response, request.LeaderUrl); err != nil {
+		f.logger.Printf("Failed to submit task response", "err", err)
+	}
+
+	return nil
+}
+
+func (f *fsm) SubmitTaskToLeader(request PriceUpdateRequest, response PriceUpdateTaskResponse, leaderUrl string) error {
+
+	taskResponseHash, err := core.GetTaskResponseDigest(response.price)
+	if err != nil {
+		log.Printf("Error getting task response header hash. skipping task (this is not expected and should be investigated)", "err", err)
+		return err
+	}
+	blsSignature := f.blsKeypair.SignMessage(taskResponseHash)
+
+	b, err := json.Marshal(map[string]string{"taskResponse": response.price.String(), "bls-signature": blsSignature.String(), "operatorId": f.operatorId.LogValue().String()})
+	if err != nil {
+		return err
+	}
+	resp, err := http.Post(fmt.Sprintf("http://%s/submitAvsTask", leaderUrl), "application-type/json", bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+
+	log.Printf("Submitted task to %s:", leaderUrl)
+	defer resp.Body.Close()
 	return nil
 }
 

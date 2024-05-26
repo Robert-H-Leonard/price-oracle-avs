@@ -7,11 +7,11 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"strings"
 )
 
 type IPriceFSM interface {
 	Join(nodeID, addr string) error
+	TriggerElection()
 }
 
 type Service struct {
@@ -53,12 +53,14 @@ func (s *Service) Start() error {
 		}
 	}()
 
+	log.Printf("Http server started\n")
+
 	return nil
 }
 
 // ServeHTTP allows Service to serve HTTP requests.
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if strings.HasPrefix(r.URL.Path, "/submit-task") {
+	if r.URL.Path == "/submitAvsTask" {
 		s.handlePriceUpdateTaskSubmittion(w, r)
 	} else if r.URL.Path == "/join" {
 		s.handleJoin(w, r)
@@ -103,6 +105,22 @@ func (s *Service) handleJoin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handlePriceUpdateTaskSubmittion(w http.ResponseWriter, r *http.Request) {
+	// var body any
+
+	// if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	// 	w.WriteHeader(http.StatusBadRequest)
+	// 	return
+	// }
+
+	m := map[string]string{}
+	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("Resolved body is %+v\n", m)
+
+	// First example just log response
 	// 1 - Verify senders bs signature + ensure operator processing is leader
 	// 2 - Verify price submissions fall within error range
 	// 3 - If this task has reached qurom submit it on-chain and trigger a new leader election
