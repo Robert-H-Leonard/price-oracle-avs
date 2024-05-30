@@ -477,7 +477,6 @@ func (o *Operator) sendAggregatedTaskResponseToContract(blsAggServiceResp blsagg
 		// panicing to help with debugging (fail fast), but we shouldn't panic if we run this in production
 		panic(blsAggServiceResp.Err)
 	}
-
 	nonSignerPubkeys := []cstaskmanager.BN254G1Point{}
 	for _, nonSignerPubkey := range blsAggServiceResp.NonSignersPubkeysG1 {
 		nonSignerPubkeys = append(nonSignerPubkeys, core.ConvertToBN254G1Point(nonSignerPubkey))

@@ -196,7 +196,6 @@ contract IncredibleSquaringTaskManager is
         // allTaskResponses[taskResponse.referenceTaskIndex] = keccak256(
         //     abi.encode(taskResponse, taskResponseMetadata)
         // );
-
         // // emitting event
         // emit TaskResponded(taskResponse, taskResponseMetadata);
     }
