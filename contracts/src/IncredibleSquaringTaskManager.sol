@@ -42,25 +42,11 @@ contract IncredibleSquaringTaskManager is
     mapping(uint32 => bytes32) public allTaskHashes;
 
     // mapping of task indices to hash of abi.encode([] taskResponse, taskResponseMetadata)
-    mapping(uint32 => bytes32) public allTaskResponses;
+    mapping(uint32 => bytes32[]) public allTaskResponses;
 
     mapping(uint32 => bool) public taskSuccesfullyChallenged;
 
-    address public aggregator;
-    address public generator;
-
-    /* MODIFIERS */
-    modifier onlyAggregator() {
-        require(msg.sender == aggregator, "Aggregator must be the caller");
-        _;
-    }
-
-    // onlyTaskGenerator is used to restrict createNewTask from only being called by a permissioned entity
-    // in a real world scenario, this would be removed by instead making createNewTask a payable function
-    modifier onlyTaskGenerator() {
-        require(msg.sender == generator, "Task generator must be the caller");
-        _;
-    }
+    mapping(string => AggregatedPrice) private aggregatedPriceFeed;
 
     constructor(
         IRegistryCoordinator _registryCoordinator,
@@ -77,8 +63,6 @@ contract IncredibleSquaringTaskManager is
     ) public initializer {
         _initializePauser(_pauserRegistry, UNPAUSE_ALL);
         _transferOwnership(initialOwner);
-        aggregator = _aggregator;
-        generator = _generator;
     }
 
     /* FUNCTIONS */
@@ -124,13 +108,6 @@ contract IncredibleSquaringTaskManager is
 
     // NOTE: this function responds to existing tasks.
     // Add onlyOperator modifier
-    /**
-        1. Submit an array of task, responses, stakesAndSignatres for each source
-        2. Verify each aggergated response matches the correct task
-        3. Check quroum on each source
-        4. Encode all task responses together
-        5. Save final price of feed
-     */
     function respondToTask(
         PriceUpdateTask calldata task,
         PriceUpdateTaskResponse[] calldata taskResponses, // Each price feed source has a different response
@@ -140,16 +117,19 @@ contract IncredibleSquaringTaskManager is
         bytes calldata quorumNumbers = task.quorumNumbers;
         uint32 quorumThresholdPercentage = task.quorumThresholdPercentage;
 
-        for (uint i = 0; i < taskResponses.length; i++) {
-            // check that the task is valid, hasn't been responsed yet, and is being responsed in time
+        // some logical checks
             require(
-                keccak256(abi.encode(task)) ==
-                    allTaskHashes[taskResponses[i].taskId],
-                "supplied task does not match the one recorded in the contract"
+                taskResponses.length > 0,
+                "Aggregator must submit task response"
             );
-            // some logical checks
+
             require(
-                allTaskResponses[taskResponses[i].taskId] == bytes32(0),
+                taskResponses.length == nonSignerStakesAndSignatures.length,
+                "response length must match aggregate signature length"
+            );
+
+            require(
+                allTaskResponses[taskResponses[0].taskId].length == 0,
                 "Aggregator has already responded to the task"
             );
 
@@ -159,45 +139,66 @@ contract IncredibleSquaringTaskManager is
                 "Aggregator has responded to the task too late"
             );
 
+        // Iterate over each source submitted
+        for (uint i = 0; i < taskResponses.length; i++) {
+            // check that the task is valid, hasn't been responsed yet, and is being responsed in time
+            require(
+                keccak256(abi.encode(task)) ==
+                    allTaskHashes[taskResponses[i].taskId],
+                "supplied task does not match the one recorded in the contract"
+            );
+
+            bytes32 message = keccak256(abi.encode(taskResponses[i]));
+
+            // check the BLS signature matches msg hash (ie. {price, feedSource, taskId})
+            (
+                QuorumStakeTotals memory quorumStakeTotals,
+                bytes32 hashOfNonSigners
+            ) = checkSignatures(
+                    message,
+                    quorumNumbers,
+                    taskCreatedBlock,
+                    nonSignerStakesAndSignatures[i]
+                );
+            
+            // check that signatories own at least a threshold percentage of each quourm
+            for (uint j = 0; j < quorumNumbers.length; j++) {
+                // we don't check that the quorumThresholdPercentages are not >100 because a greater value would trivially fail the check, implying
+                // signed stake > total stake
+                require(
+                    quorumStakeTotals.signedStakeForQuorum[j] *
+                        _THRESHOLD_DENOMINATOR >=
+                        quorumStakeTotals.totalStakeForQuorum[j] *
+                            uint8(quorumThresholdPercentage),
+                    "Signatories do not own at least threshold percentage of a quorum"
+                );
+            }
+
+            TaskResponseMetadata memory taskResponseMetadata = TaskResponseMetadata(
+                uint32(block.number),
+                hashOfNonSigners
+            );
+
+            // updating the storage with task responses
+            allTaskResponses[taskResponses[i].taskId].push(keccak256(
+                abi.encode(taskResponses[i], taskResponseMetadata)
+            ));
+
+            // emitting event
+            emit TaskResponded(taskResponses[i].taskId, taskResponses[i], taskResponseMetadata);
         }
-        // /* CHECKING SIGNATURES & WHETHER THRESHOLD IS MET OR NOT */
-        // // calculate message which operators signed
-        // bytes32 message = keccak256(abi.encode(taskResponse));
 
-        // // check the BLS signature
-        // (
-        //     QuorumStakeTotals memory quorumStakeTotals,
-        //     bytes32 hashOfNonSigners
-        // ) = checkSignatures(
-        //         message,
-        //         quorumNumbers,
-        //         taskCreatedBlock,
-        //         nonSignerStakesAndSignature
-        //     );
+        // Update aggregated price of feed
+        aggregatedPriceFeed[task.feedName] = AggregatedPrice({price: taskResponses[0].price, decimals: uint8(taskResponses[0].decimals), lastBlockUpdated: uint32(block.number), lastUpdatedTaskId: taskResponses[0].price});
+    }
 
-        // // check that signatories own at least a threshold percentage of each quourm
-        // for (uint i = 0; i < quorumNumbers.length; i++) {
-        //     // we don't check that the quorumThresholdPercentages are not >100 because a greater value would trivially fail the check, implying
-        //     // signed stake > total stake
-        //     require(
-        //         quorumStakeTotals.signedStakeForQuorum[i] *
-        //             _THRESHOLD_DENOMINATOR >=
-        //             quorumStakeTotals.totalStakeForQuorum[i] *
-        //                 uint8(quorumThresholdPercentage),
-        //         "Signatories do not own at least threshold percentage of a quorum"
-        //     );
-        // }
+    function fetchLatestAggregatedPrice(string calldata feedName) external view returns(AggregatedPrice memory) {
+        require(aggregatedPriceFeed[feedName].lastBlockUpdated != 0, "Requested feed is not supported");
 
-        // TaskResponseMetadata memory taskResponseMetadata = TaskResponseMetadata(
-        //     uint32(block.number),
-        //     hashOfNonSigners
-        // );
-        // // updating the storage with task responsea
-        // allTaskResponses[taskResponse.referenceTaskIndex] = keccak256(
-        //     abi.encode(taskResponse, taskResponseMetadata)
-        // );
-        // // emitting event
-        // emit TaskResponded(taskResponse, taskResponseMetadata);
+        AggregatedPrice memory data = aggregatedPriceFeed[feedName];
+        require(uint32(block.number) - data.lastBlockUpdated < 100, "Requested feed has not been updated in 100 blocks");
+
+        return data;
     }
 
     function taskNumber() external view returns (uint32) {
@@ -213,139 +214,7 @@ contract IncredibleSquaringTaskManager is
         TaskResponseMetadata calldata taskResponseMetadata,
         BN254.G1Point[] memory pubkeysOfNonSigningOperators
     ) external {
-        uint32 referenceTaskIndex = taskResponse.referenceTaskIndex;
-        uint256 numberToBeSquared = task.numberToBeSquared;
-        // some logical checks
-        require(
-            allTaskResponses[referenceTaskIndex] != bytes32(0),
-            "Task hasn't been responded to yet"
-        );
-        require(
-            allTaskResponses[referenceTaskIndex] ==
-                keccak256(abi.encode(taskResponse, taskResponseMetadata)),
-            "Task response does not match the one recorded in the contract"
-        );
-        require(
-            taskSuccesfullyChallenged[referenceTaskIndex] == false,
-            "The response to this task has already been challenged successfully."
-        );
-
-        require(
-            uint32(block.number) <=
-                taskResponseMetadata.taskResponsedBlock +
-                    TASK_CHALLENGE_WINDOW_BLOCK,
-            "The challenge period for this task has already expired."
-        );
-
-        // logic for checking whether challenge is valid or not
-        uint256 actualSquaredOutput = numberToBeSquared * numberToBeSquared;
-        bool isResponseCorrect = (actualSquaredOutput ==
-            taskResponse.numberSquared);
-
-        // if response was correct, no slashing happens so we return
-        if (isResponseCorrect == true) {
-            emit TaskChallengedUnsuccessfully(referenceTaskIndex, msg.sender);
-            return;
-        }
-
-        // get the list of hash of pubkeys of operators who weren't part of the task response submitted by the aggregator
-        bytes32[] memory hashesOfPubkeysOfNonSigningOperators = new bytes32[](
-            pubkeysOfNonSigningOperators.length
-        );
-        for (uint i = 0; i < pubkeysOfNonSigningOperators.length; i++) {
-            hashesOfPubkeysOfNonSigningOperators[
-                i
-            ] = pubkeysOfNonSigningOperators[i].hashG1Point();
-        }
-
-        // verify whether the pubkeys of "claimed" non-signers supplied by challenger are actually non-signers as recorded before
-        // when the aggregator responded to the task
-        // currently inlined, as the MiddlewareUtils.computeSignatoryRecordHash function was removed from BLSSignatureChecker
-        // in this PR: https://github.com/Layr-Labs/eigenlayer-contracts/commit/c836178bf57adaedff37262dff1def18310f3dce#diff-8ab29af002b60fc80e3d6564e37419017c804ae4e788f4c5ff468ce2249b4386L155-L158
-        // TODO(samlaf): contracts team will add this function back in the BLSSignatureChecker, which we should use to prevent potential bugs from code duplication
-        bytes32 signatoryRecordHash = keccak256(
-            abi.encodePacked(
-                task.taskCreatedBlock,
-                hashesOfPubkeysOfNonSigningOperators
-            )
-        );
-        require(
-            signatoryRecordHash == taskResponseMetadata.hashOfNonSigners,
-            "The pubkeys of non-signing operators supplied by the challenger are not correct."
-        );
-
-        // get the address of operators who didn't sign
-        address[] memory addresssOfNonSigningOperators = new address[](
-            pubkeysOfNonSigningOperators.length
-        );
-        for (uint i = 0; i < pubkeysOfNonSigningOperators.length; i++) {
-            addresssOfNonSigningOperators[i] = BLSApkRegistry(
-                address(blsApkRegistry)
-            ).pubkeyHashToOperator(hashesOfPubkeysOfNonSigningOperators[i]);
-        }
-
-        // @dev the below code is commented out for the upcoming M2 release
-        //      in which there will be no slashing. The slasher is also being redesigned
-        //      so its interface may very well change.
-        // ==========================================
-        // // get the list of all operators who were active when the task was initialized
-        // Operator[][] memory allOperatorInfo = getOperatorState(
-        //     IRegistryCoordinator(address(registryCoordinator)),
-        //     task.quorumNumbers,
-        //     task.taskCreatedBlock
-        // );
-        // // freeze the operators who signed adversarially
-        // for (uint i = 0; i < allOperatorInfo.length; i++) {
-        //     // first for loop iterate over quorums
-
-        //     for (uint j = 0; j < allOperatorInfo[i].length; j++) {
-        //         // second for loop iterate over operators active in the quorum when the task was initialized
-
-        //         // get the operator address
-        //         bytes32 operatorID = allOperatorInfo[i][j].operatorId;
-        //         address operatorAddress = BLSPubkeyRegistry(
-        //             address(blsPubkeyRegistry)
-        //         ).pubkeyCompendium().pubkeyHashToOperator(operatorID);
-
-        //         // check if the operator has already NOT been frozen
-        //         if (
-        //             IServiceManager(
-        //                 address(
-        //                     BLSRegistryCoordinatorWithIndices(
-        //                         address(registryCoordinator)
-        //                     ).serviceManager()
-        //                 )
-        //             ).slasher().isFrozen(operatorAddress) == false
-        //         ) {
-        //             // check whether the operator was a signer for the task
-        //             bool wasSigningOperator = true;
-        //             for (
-        //                 uint k = 0;
-        //                 k < addresssOfNonSigningOperators.length;
-        //                 k++
-        //             ) {
-        //                 if (
-        //                     operatorAddress == addresssOfNonSigningOperators[k]
-        //                 ) {
-        //                     // if the operator was a non-signer, then we set the flag to false
-        //                     wasSigningOperator == false;
-        //                     break;
-        //                 }
-        //             }
-
-        //             if (wasSigningOperator == true) {
-        //                 BLSRegistryCoordinatorWithIndices(
-        //                     address(registryCoordinator)
-        //                 ).serviceManager().freezeOperator(operatorAddress);
-        //             }
-        //         }
-        //     }
-        // }
-
-        // the task response has been challenged successfully
-        taskSuccesfullyChallenged[referenceTaskIndex] = true;
-
-        emit TaskChallengedSuccessfully(referenceTaskIndex, msg.sender);
+        // TODO
     }
 
     function getTaskResponseWindowBlock() external view returns (uint32) {

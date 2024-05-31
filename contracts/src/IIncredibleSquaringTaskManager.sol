@@ -10,7 +10,8 @@ interface IIncredibleSquaringTaskManager {
     event PriceUpdateRequested(uint32 indexed taskIndex, PriceUpdateTask task);
 
     event TaskResponded(
-        TaskResponse taskResponse,
+        uint32 indexed taskIndex,
+        PriceUpdateTaskResponse taskResponse,
         TaskResponseMetadata taskResponseMetadata
     );
 
@@ -70,6 +71,13 @@ interface IIncredibleSquaringTaskManager {
     struct TaskResponseMetadata {
         uint32 taskResponsedBlock;
         bytes32 hashOfNonSigners;
+    }
+
+    struct AggregatedPrice {
+        uint32 price;
+        uint8 decimals;
+        uint32 lastBlockUpdated;
+        uint32 lastUpdatedTaskId;
     }
 
 
