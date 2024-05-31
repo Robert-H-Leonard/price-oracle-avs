@@ -97,9 +97,10 @@ type PriceUpdateRequest struct {
 }
 
 type PriceUpdateTaskResponse struct {
-	Price  uint64
-	Source string
-	TaskId uint32
+	Price    uint32
+	Decimals uint32
+	TaskId   uint32
+	Source   string
 }
 
 type TaskDigestQuorum struct {
@@ -407,6 +408,8 @@ func (o *Operator) ProcessNewPriceUpdateCreatedLog(newPriceUpdateTaskCreatedLog 
 	o.logger.Info("Received new price updated task, sending request to followers",
 		"feedName", string(newPriceUpdateTaskCreatedLog.Task.FeedName[:]),
 		"taskCreatedBlock", newPriceUpdateTaskCreatedLog.Task.TaskCreatedBlock,
+		"minNumberOfOracleNetworks", newPriceUpdateTaskCreatedLog.Task.MinNumOfOracleNetworks,
+		"quorumThreshholdPercentage", newPriceUpdateTaskCreatedLog.Task.QuorumThresholdPercentage,
 	)
 
 	data := &PriceUpdateRequest{
@@ -459,6 +462,8 @@ func (o *Operator) sendNewTask() error {
 	for _, quorumNum := range newTask.QuorumNumbers {
 		quorumNums = append(quorumNums, sdktypes.QuorumNum(quorumNum))
 	}
+
+	o.logger.Info("Initializing task", "taskId", taskIndex)
 	o.blsAggregationService.InitializeNewTask(taskIndex, newTask.TaskCreatedBlock, quorumNums, quorumThresholdPercentages, taskTimeToExpiry)
 	return nil
 }
@@ -508,7 +513,8 @@ func (o *Operator) sendAggregatedTaskResponseToContract(blsAggServiceResp blsagg
 		"source", taskResponse.Source,
 	)
 
-	// Cache threshold is achieved for this taskDigest (aka source)
+	o.tasksMu.Lock()
+	// Cache threshold is achieved for this taskDigest (ie. source)
 	o.taskDigestQuorum[blsAggServiceResp.TaskIndex] = TaskDigestQuorum{
 		finalTaskResponse:           taskResponse,
 		nonSignerStakesAndSignature: nonSignerStakesAndSignature,
@@ -553,6 +559,7 @@ func (o *Operator) sendAggregatedTaskResponseToContract(blsAggServiceResp blsagg
 		// Elect new operator as leader
 		o.priceFSM.TriggerElection()
 	}
+	o.tasksMu.Unlock()
 }
 
 func contains(s []string, str string) bool {

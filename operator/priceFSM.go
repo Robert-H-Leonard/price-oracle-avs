@@ -225,7 +225,7 @@ func (f *fsm) Apply(l *raft.Log) interface{} {
 
 	response := []PriceUpdateTaskResponse{} // slice will automatically resize if needed
 
-	chainlinkResponse := PriceUpdateTaskResponse{Price: resolvePrice.Uint64(), Source: "chainlink", TaskId: request.TaskId}
+	chainlinkResponse := PriceUpdateTaskResponse{Price: uint32(resolvePrice.Uint64()), Source: "chainlink", TaskId: request.TaskId, Decimals: 18}
 
 	f.logger.Printf("Chainlink response: %v", chainlinkResponse)
 	response = append(response, chainlinkResponse)
@@ -249,7 +249,7 @@ func (f *fsm) SubmitTaskToLeader(request PriceUpdateRequest, responses []PriceUp
 		}
 
 		f.logger.Printf("Submiting response %v for task %v\n", i, response.TaskId)
-		taskResponseHash, err := core.GetTaskResponseDigest(response.Price, response.Source, response.TaskId)
+		taskResponseHash, err := core.GetTaskResponseDigest(response.Price, response.Source, response.TaskId, response.Decimals)
 		if err != nil {
 			log.Printf("Error getting task response header hash. skipping task (this is not expected and should be investigated)", "err", err)
 			return err
