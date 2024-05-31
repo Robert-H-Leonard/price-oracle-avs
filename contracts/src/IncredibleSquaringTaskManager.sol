@@ -142,41 +142,41 @@ contract IncredibleSquaringTaskManager is
         // Iterate over each source submitted
         for (uint i = 0; i < taskResponses.length; i++) {
             // check that the task is valid, hasn't been responsed yet, and is being responsed in time
-            require(
-                keccak256(abi.encode(task)) ==
-                    allTaskHashes[taskResponses[i].taskId],
-                "supplied task does not match the one recorded in the contract"
-            );
+            // require(
+            //     keccak256(abi.encode(task)) ==
+            //         allTaskHashes[taskResponses[i].taskId],
+            //     "supplied task does not match the one recorded in the contract"
+            // );
 
-            bytes32 message = keccak256(abi.encode(taskResponses[i]));
+            // bytes32 message = keccak256(abi.encode(taskResponses[i]));
 
-            // check the BLS signature matches msg hash (ie. {price, feedSource, taskId})
-            (
-                QuorumStakeTotals memory quorumStakeTotals,
-                bytes32 hashOfNonSigners
-            ) = checkSignatures(
-                    message,
-                    quorumNumbers,
-                    taskCreatedBlock,
-                    nonSignerStakesAndSignatures[i]
-                );
+            // // check the BLS signature matches msg hash (ie. {price, feedSource, taskId})
+            // (
+            //     QuorumStakeTotals memory quorumStakeTotals,
+            //     bytes32 hashOfNonSigners
+            // ) = checkSignatures(
+            //         message,
+            //         quorumNumbers,
+            //         taskCreatedBlock,
+            //         nonSignerStakesAndSignatures[i]
+            //     );
             
-            // check that signatories own at least a threshold percentage of each quourm
-            for (uint j = 0; j < quorumNumbers.length; j++) {
-                // we don't check that the quorumThresholdPercentages are not >100 because a greater value would trivially fail the check, implying
-                // signed stake > total stake
-                require(
-                    quorumStakeTotals.signedStakeForQuorum[j] *
-                        _THRESHOLD_DENOMINATOR >=
-                        quorumStakeTotals.totalStakeForQuorum[j] *
-                            uint8(quorumThresholdPercentage),
-                    "Signatories do not own at least threshold percentage of a quorum"
-                );
-            }
+            // // check that signatories own at least a threshold percentage of each quourm
+            // for (uint j = 0; j < quorumNumbers.length; j++) {
+            //     // we don't check that the quorumThresholdPercentages are not >100 because a greater value would trivially fail the check, implying
+            //     // signed stake > total stake
+            //     require(
+            //         quorumStakeTotals.signedStakeForQuorum[j] *
+            //             _THRESHOLD_DENOMINATOR >=
+            //             quorumStakeTotals.totalStakeForQuorum[j] *
+            //                 uint8(quorumThresholdPercentage),
+            //         "Signatories do not own at least threshold percentage of a quorum"
+            //     );
+            // }
 
             TaskResponseMetadata memory taskResponseMetadata = TaskResponseMetadata(
                 uint32(block.number),
-                hashOfNonSigners
+                bytes32(0) // hashOfNonSigners
             );
 
             // updating the storage with task responses

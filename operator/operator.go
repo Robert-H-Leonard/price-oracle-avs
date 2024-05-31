@@ -552,6 +552,7 @@ func (o *Operator) sendAggregatedTaskResponseToContract(blsAggServiceResp blsagg
 
 		_, err := o.avsWriter.SendAggregatedResponse(context.Background(), task, finalResponses, finalStakesAndSignatures)
 
+		o.logger.Info("Send aggregate response", "finalRepsonses", finalResponses, "signatures", finalStakesAndSignatures)
 		if err != nil {
 			o.logger.Error("Aggregator failed to respond to task", "err", err)
 		}
