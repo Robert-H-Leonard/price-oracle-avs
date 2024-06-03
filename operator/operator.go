@@ -289,13 +289,13 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 
 	if c.RegisterOperatorOnStartup {
 		operator.registerOperatorOnStartup(operatorEcdsaPrivateKey, common.HexToAddress(c.TokenStrategyAddr))
-		avsReader
+		avsWriter.ResigterOperatorUrl(context.Background(), c.RaftBindingURI)
+		// Call avsWriter to register url
 	}
 
 	// Setup raft
 
-	// 1) Register raft url
-	// 2) Check for past operators via OperatorRegistered event on RegistryCoordinator
+	// 2) Check for past operators via OperatorRegistered event on ServiceManager
 	// 3) Bootstrap cluster if no previous opertorId found
 	consensusFSM.RaftBind = c.RaftBindingURI
 	consensusFSM.RaftDir = c.RaftDirectoryPath

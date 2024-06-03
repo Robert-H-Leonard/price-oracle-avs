@@ -74,3 +74,14 @@ func (r *AvsReader) GetErc20Mock(ctx context.Context, tokenAddr gethcommon.Addre
 	}
 	return erc20Mock, nil
 }
+
+func (r *AvsReader) GetOperatorConsensusUrl(ctx context.Context, operatorAddr gethcommon.Address) (string, error) {
+	url, err := r.AvsServiceBindings.ServiceManager.FetchOperatorUrl(&bind.CallOpts{}, operatorAddr)
+
+	if err != nil {
+		r.logger.Error("Failed to retreive requested operator url")
+		return "", err
+	}
+
+	return url, nil
+}
