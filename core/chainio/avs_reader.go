@@ -11,6 +11,7 @@ import (
 	logging "github.com/Layr-Labs/eigensdk-go/logging"
 
 	erc20mock "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/ERC20Mock"
+	csserviceManager "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/IncredibleSquaringServiceManager"
 	cstaskmanager "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/IncredibleSquaringTaskManager"
 	"github.com/Layr-Labs/incredible-squaring-avs/core/config"
 )
@@ -84,4 +85,9 @@ func (r *AvsReader) GetOperatorConsensusUrl(ctx context.Context, operatorAddr ge
 	}
 
 	return url, nil
+}
+
+func (r *AvsReader) GetRegistedOperatorUrls(ctx context.Context) (*csserviceManager.ContractIncredibleSquaringServiceManagerOperatorUrlRegisteredIterator, error) {
+	filter := &bind.FilterOpts{Start: 0, End: nil, Context: ctx}
+	return r.AvsServiceBindings.ServiceManager.FilterOperatorUrlRegistered(filter)
 }

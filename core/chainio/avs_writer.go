@@ -92,7 +92,7 @@ func (w *AvsWriter) ResigterOperatorUrl(ctx context.Context, raftUrl string) err
 		return err
 	}
 
-	url, err = w.AvsContractBindings.ServiceManager.ContractIncredibleSquaringServiceManagerFilterer.ParseOperatorUrlRegistered(*receipt.Logs[0])
+	url, err := w.AvsContractBindings.ServiceManager.ContractIncredibleSquaringServiceManagerFilterer.ParseOperatorUrlRegistered(*receipt.Logs[0])
 
 	if err != nil {
 		w.logger.Error("Operator failed to register consensus url", "err", err)
