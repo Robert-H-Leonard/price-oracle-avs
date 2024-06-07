@@ -18,7 +18,7 @@ contract IncredibleSquaringServiceManager is ServiceManagerBase {
 
     mapping(address => string) public operatorUrls;
 
-    event OperatorUrlRegistered(address operatorId);
+    event OperatorUrlRegistered(address operatorId, string url);
 
     /// @notice when applied to a function, ensures that the function is only callable by the `registryCoordinator`.
     modifier onlyIncredibleSquaringTaskManager() {
@@ -62,11 +62,11 @@ contract IncredibleSquaringServiceManager is ServiceManagerBase {
 
     function registerOperatorConsensusUrl(string memory url) onlyOperator external {
         operatorUrls[msg.sender] = url;
-        emit OperatorUrlRegistered(msg.sender);
+        emit OperatorUrlRegistered(msg.sender, url);
     }
 
     function fetchOperatorUrl(address operatorAddress) onlyOperator external view returns(string memory) {
-        require (bytes(operatorUrls[msg.sender]).length != 0, "No url registered for requested address");
-        return operatorUrls[msg.sender];
+        require (bytes(operatorUrls[operatorAddress]).length != 0, "No url registered for requested address");
+        return operatorUrls[operatorAddress];
     }
 }

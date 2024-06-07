@@ -23,6 +23,7 @@ type AvsReaderer interface {
 		ctx context.Context, msgHash [32]byte, quorumNumbers []byte, referenceBlockNumber uint32, nonSignerStakesAndSignature cstaskmanager.IBLSSignatureCheckerNonSignerStakesAndSignature,
 	) (cstaskmanager.IBLSSignatureCheckerQuorumStakeTotals, error)
 	GetErc20Mock(ctx context.Context, tokenAddr gethcommon.Address) (*erc20mock.ContractERC20Mock, error)
+	GetRegistedOperatorUrls(ctx context.Context) (*csserviceManager.ContractIncredibleSquaringServiceManagerOperatorUrlRegisteredIterator, error)
 }
 
 type AvsReader struct {
@@ -76,18 +77,7 @@ func (r *AvsReader) GetErc20Mock(ctx context.Context, tokenAddr gethcommon.Addre
 	return erc20Mock, nil
 }
 
-func (r *AvsReader) GetOperatorConsensusUrl(ctx context.Context, operatorAddr gethcommon.Address) (string, error) {
-	url, err := r.AvsServiceBindings.ServiceManager.FetchOperatorUrl(&bind.CallOpts{}, operatorAddr)
-
-	if err != nil {
-		r.logger.Error("Failed to retreive requested operator url")
-		return "", err
-	}
-
-	return url, nil
-}
-
 func (r *AvsReader) GetRegistedOperatorUrls(ctx context.Context) (*csserviceManager.ContractIncredibleSquaringServiceManagerOperatorUrlRegisteredIterator, error) {
-	filter := &bind.FilterOpts{Start: 0, End: nil, Context: ctx}
-	return r.AvsServiceBindings.ServiceManager.FilterOperatorUrlRegistered(filter)
+	data, err := r.AvsServiceBindings.ServiceManager.FilterOperatorUrlRegistered(nil)
+	return data, err
 }
