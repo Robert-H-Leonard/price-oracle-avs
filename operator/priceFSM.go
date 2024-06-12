@@ -2,6 +2,7 @@ package operator
 
 import (
 	"bytes"
+	"crypto/ecdsa"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 	"github.com/Layr-Labs/incredible-squaring-avs/core"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/hashicorp/raft"
 	raftboltdb "github.com/hashicorp/raft-boltdb"
@@ -51,22 +54,33 @@ type PriceFSM struct {
 	priceFeedAdapter *priceFeedAdapter.ContractPriceFeedAdapter
 	blsKeypair       *bls.KeyPair
 	operatorId       sdktypes.OperatorId
+	privateKey       *ecdsa.PrivateKey
 }
 
-func NewConcensusFSM(feedAdapter *priceFeedAdapter.ContractPriceFeedAdapter, keyPair *bls.KeyPair) *PriceFSM {
+func NewConcensusFSM(feedAdapter *priceFeedAdapter.ContractPriceFeedAdapter, keyPair *bls.KeyPair, pk *ecdsa.PrivateKey) *PriceFSM {
 	return &PriceFSM{
 		priceData:        make(map[string]int),
 		logger:           log.New(os.Stderr, "[priceData] ", log.LstdFlags),
 		priceFeedAdapter: feedAdapter,
 		blsKeypair:       keyPair,
+		privateKey:       pk,
 	}
 }
 
-func JoinExistingNetwork(joinAddr, raftAddr, nodeID string) error {
-	b, err := json.Marshal(map[string]string{"addr": raftAddr, "id": nodeID})
+func (p *PriceFSM) JoinExistingNetwork(joinAddr, raftAddr, nodeID string, latestBlock uint64) error {
+
+	// Sign message with latest block and send to leader
+	data := []byte(strconv.FormatUint(latestBlock, 10))
+	hash := crypto.Keccak256Hash(data)
+
+	message, err := crypto.Sign(hash.Bytes(), p.privateKey)
+
+	b, err := json.Marshal(map[string]string{"addr": raftAddr, "id": nodeID, "signedMessage": string(message)})
+
 	if err != nil {
 		return err
 	}
+
 	resp, err := http.Post(fmt.Sprintf("http://%s/join", joinAddr), "application-type/json", bytes.NewReader(b))
 	if err != nil {
 		return err

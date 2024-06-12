@@ -265,7 +265,7 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 	}
 
 	// setup raft consensus client
-	consensusFSM := NewConcensusFSM(priceFeedClient, blsKeyPair)
+	consensusFSM := NewConcensusFSM(priceFeedClient, blsKeyPair, operatorEcdsaPrivateKey)
 
 	taskResponses := make(map[uint32]map[sdktypes.TaskResponseDigest]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse)
 
@@ -334,7 +334,7 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 			// initialize raft consensus server
 			consensusFSM.Initialize(false, c.OperatorAddress)
 
-			if err := JoinExistingNetwork(url, c.RaftBindingURI, c.OperatorAddress); err != nil {
+			if err := consensusFSM.JoinExistingNetwork(url, c.RaftBindingURI, c.OperatorAddress, blockNumber); err != nil {
 				logger.Warn("failed to join node at", "url", url, "err", err)
 				results.Next()
 			}
@@ -518,7 +518,7 @@ func (o *Operator) sendAggregatedTaskResponseToContract(blsAggServiceResp blsagg
 	isLeader, _ := o.priceFSM.IsLeader()
 
 	if !isLeader {
-		return // Only leader create task
+		return // Only leader can submit aggregate task
 	}
 
 	if blsAggServiceResp.Err != nil {

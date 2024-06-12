@@ -108,8 +108,10 @@ func (s *Service) handleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1 - Add call to send a message requesting it be signed by remoteAddr
-	// 2 - Verify remote add is a valid operator by verifying signature
+	// 1 - Parse signed message
+	// i) Verify block number is within last 2 blocks
+	// ii) Parse signer address
+	// iii) verify signer is valid operator
 
 	if err := s.priceFSM.Join(nodeID, remoteAddr); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -161,9 +163,4 @@ func (s *Service) handlePriceUpdateTaskSubmittion(w http.ResponseWriter, r *http
 			"operatorId", signedResponse.OperatorId.LogValue().String(),
 		)
 	}
-}
-
-func (s *Service) handleVerify(w http.ResponseWriter, r *http.Request) {
-	// 1 - Sign a message with nodeId + operator address
-	// 2 - Return signed message
 }
