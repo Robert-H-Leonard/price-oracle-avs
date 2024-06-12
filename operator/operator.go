@@ -351,6 +351,7 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 
 	// start http server with additional raft endpoints
 	h := NewService(c.HttpBindingURI, consensusFSM, blsAggregationService, &taskResponses)
+	h.avsReader = avsReader
 	h.logger = logger
 	if err := h.Start(); err != nil {
 		logger.Error("failed to start HTTP service: %s", err.Error())

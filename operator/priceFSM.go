@@ -75,7 +75,7 @@ func (p *PriceFSM) JoinExistingNetwork(joinAddr, raftAddr, nodeID string, latest
 
 	message, err := crypto.Sign(hash.Bytes(), p.privateKey)
 
-	b, err := json.Marshal(map[string]string{"addr": raftAddr, "id": nodeID, "signedMessage": string(message)})
+	b, err := json.Marshal(map[string]string{"addr": raftAddr, "id": nodeID, "signedMessage": string(message), "messageHash": hash.String()})
 
 	if err != nil {
 		return err

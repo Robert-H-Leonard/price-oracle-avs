@@ -15,6 +15,9 @@ import (
 	sdktypes "github.com/Layr-Labs/eigensdk-go/types"
 	cstaskmanager "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/IncredibleSquaringTaskManager"
 	"github.com/Layr-Labs/incredible-squaring-avs/core"
+	"github.com/Layr-Labs/incredible-squaring-avs/core/chainio"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 type IPriceFSM interface {
@@ -31,6 +34,7 @@ type Service struct {
 	taskResponsesMu       sync.RWMutex
 	taskResponses         *map[uint32]map[sdktypes.TaskResponseDigest]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse
 	blsAggregationService blsagg.BlsAggregationService
+	avsReader             chainio.AvsReaderer
 }
 
 // New returns an uninitialized HTTP service.
@@ -104,6 +108,32 @@ func (s *Service) handleJoin(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		w.WriteHeader(http.StatusBadRequest)
 		return
+	}
+
+	signedMessage, ok := m["signedMessage"]
+	if !ok {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	messageHash, ok := m["messageHash"]
+	if !ok {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	signedMessageBytes := []byte(signedMessage)
+
+	sigPublicKey, err := crypto.Ecrecover([]byte(messageHash), signedMessageBytes)
+
+	if err != nil {
+		s.logger.Warn("Failed to parse operator signature", "err", err)
+	}
+
+	isValidOperator, _ := s.avsReader.IsValidOperator(context.Background(), common.HexToAddress(string(sigPublicKey)))
+
+	if !isValidOperator {
+		s.logger.Warn("Resolved address is not a valid operator", "address", sigPublicKey)
 	}
 
 	// 1 - Parse signed message
