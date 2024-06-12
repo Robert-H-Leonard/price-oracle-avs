@@ -77,8 +77,6 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handlePriceUpdateTaskSubmittion(w, r)
 	} else if r.URL.Path == "/join" {
 		s.handleJoin(w, r)
-	} else if r.URL.Path == "/verify" {
-		s.handleVerify(w, r)
 	} else {
 		w.WriteHeader(http.StatusNotFound)
 	}
