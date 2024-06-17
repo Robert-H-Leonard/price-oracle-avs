@@ -81,7 +81,7 @@ func (p *PriceFSM) JoinExistingNetwork(joinAddr, raftAddr, nodeID string, latest
 		return err
 	}
 
-	b, err := json.Marshal(map[string]string{"signedMessage": base64.StdEncoding.EncodeToString(message[:]), "messageHash": base64.StdEncoding.EncodeToString(hash.Bytes()[:])})
+	b, err := json.Marshal(map[string]string{"signedMessage": base64.StdEncoding.EncodeToString(message[:]), "messageHash": base64.StdEncoding.EncodeToString(hash.Bytes()[:]), "blockNumber": strconv.FormatUint(latestBlock, 10)})
 
 	if err != nil {
 		return err
@@ -94,7 +94,7 @@ func (p *PriceFSM) JoinExistingNetwork(joinAddr, raftAddr, nodeID string, latest
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return errors.New("Failed to join existing cluster")
+		return errors.New(fmt.Sprintf("Failed to join raft cluster because:"))
 	}
 
 	log.Printf("Joined raft consensus through uri %s", joinAddr)

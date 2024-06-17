@@ -9,8 +9,10 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 
+	"github.com/Layr-Labs/eigensdk-go/chainio/clients/eth"
 	"github.com/Layr-Labs/eigensdk-go/logging"
 	blsagg "github.com/Layr-Labs/eigensdk-go/services/bls_aggregation"
 	sdktypes "github.com/Layr-Labs/eigensdk-go/types"
@@ -35,15 +37,17 @@ type Service struct {
 	taskResponses         *map[uint32]map[sdktypes.TaskResponseDigest]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse
 	blsAggregationService blsagg.BlsAggregationService
 	avsReader             chainio.AvsReaderer
+	ethClient             eth.Client
 }
 
 // New returns an uninitialized HTTP service.
-func NewService(addr string, priceFSM IPriceFSM, blsAggregationService blsagg.BlsAggregationService, taskResponses *map[uint32]map[sdktypes.TaskResponseDigest]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse) *Service {
+func NewService(addr string, priceFSM IPriceFSM, blsAggregationService blsagg.BlsAggregationService, taskResponses *map[uint32]map[sdktypes.TaskResponseDigest]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse, ethClient eth.Client) *Service {
 	return &Service{
 		addr:                  addr,
 		priceFSM:              priceFSM,
 		taskResponses:         taskResponses,
 		blsAggregationService: blsAggregationService,
+		ethClient:             ethClient,
 	}
 }
 
@@ -93,7 +97,7 @@ func (s *Service) handleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(m) != 2 {
+	if len(m) != 3 {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -105,6 +109,12 @@ func (s *Service) handleJoin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	messageHash, ok := m["messageHash"]
+	if !ok {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	blockNumber, ok := m["blockNumber"]
 	if !ok {
 		w.WriteHeader(http.StatusBadRequest)
 		return
@@ -139,7 +149,28 @@ func (s *Service) handleJoin(w http.ResponseWriter, r *http.Request) {
 		s.logger.Warn("Resolved operator address joining raft cluster is", "address", crypto.PubkeyToAddress(*sigPublicKey))
 	}
 
-	// i) Verify block number is within last 2 blocks
+	data := []byte(blockNumber)
+	hash := crypto.Keccak256Hash(data)
+	resolvedBlockNumberHash := base64.StdEncoding.EncodeToString(hash.Bytes()[:])
+
+	if messageHash != resolvedBlockNumberHash {
+		s.logger.Warn("Blocknumber hash does not match block number")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("Blocknumber hash does not match block number"))
+		return
+	}
+
+	// Verify block number is within last 2 blocks to protect against stale signatures
+	latestBlock, _ := s.ethClient.BlockNumber(context.Background())
+
+	blockAsInt, _ := strconv.ParseUint(blockNumber, 10, 64)
+
+	if blockAsInt != latestBlock && blockAsInt != latestBlock-1 {
+		s.logger.Warn("Blocknumber in signature is to old")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("Blocknumber in signature is to old"))
+		return
+	}
 
 	nodeID := crypto.PubkeyToAddress(*sigPublicKey).String()
 
