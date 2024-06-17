@@ -3,7 +3,9 @@ package operator
 import (
 	"bytes"
 	"crypto/ecdsa"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -75,18 +77,27 @@ func (p *PriceFSM) JoinExistingNetwork(joinAddr, raftAddr, nodeID string, latest
 
 	message, err := crypto.Sign(hash.Bytes(), p.privateKey)
 
-	b, err := json.Marshal(map[string]string{"addr": raftAddr, "id": nodeID, "signedMessage": string(message), "messageHash": hash.String()})
+	if err != nil {
+		return err
+	}
+
+	b, err := json.Marshal(map[string]string{"signedMessage": base64.StdEncoding.EncodeToString(message[:]), "messageHash": base64.StdEncoding.EncodeToString(hash.Bytes()[:])})
 
 	if err != nil {
 		return err
 	}
 
 	resp, err := http.Post(fmt.Sprintf("http://%s/join", joinAddr), "application-type/json", bytes.NewReader(b))
+
 	if err != nil {
 		return err
 	}
 
-	log.Printf("Joined raft consensus through uri %s:", joinAddr)
+	if resp.StatusCode != http.StatusOK {
+		return errors.New("Failed to join existing cluster")
+	}
+
+	log.Printf("Joined raft consensus through uri %s", joinAddr)
 	defer resp.Body.Close()
 	return nil
 }

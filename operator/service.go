@@ -4,6 +4,7 @@ package operator
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"log"
 	"net"
@@ -16,7 +17,6 @@ import (
 	cstaskmanager "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/IncredibleSquaringTaskManager"
 	"github.com/Layr-Labs/incredible-squaring-avs/core"
 	"github.com/Layr-Labs/incredible-squaring-avs/core/chainio"
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
@@ -98,18 +98,6 @@ func (s *Service) handleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	remoteAddr, ok := m["addr"]
-	if !ok {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	nodeID, ok := m["id"]
-	if !ok {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
 	signedMessage, ok := m["signedMessage"]
 	if !ok {
 		w.WriteHeader(http.StatusBadRequest)
@@ -122,29 +110,45 @@ func (s *Service) handleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	signedMessageBytes := []byte(signedMessage)
+	signedMessageBytes, err := base64.StdEncoding.DecodeString(signedMessage)
 
-	sigPublicKey, err := crypto.Ecrecover([]byte(messageHash), signedMessageBytes)
+	if err != nil {
+		s.logger.Warn("Failed to decode signed message", "err", err)
+	}
+
+	messageBytes, err := base64.StdEncoding.DecodeString(messageHash)
+
+	if err != nil {
+		s.logger.Warn("Failed to decode message hash", "err", err)
+	}
+
+	sigPublicKey, err := crypto.SigToPub(messageBytes, signedMessageBytes)
 
 	if err != nil {
 		s.logger.Warn("Failed to parse operator signature", "err", err)
 	}
 
-	isValidOperator, _ := s.avsReader.IsValidOperator(context.Background(), common.HexToAddress(string(sigPublicKey)))
+	validOperatorUrls, err := s.avsReader.FetchOperatorUrl(context.Background(), crypto.PubkeyToAddress(*sigPublicKey))
 
-	if !isValidOperator {
-		s.logger.Warn("Resolved address is not a valid operator", "address", sigPublicKey)
+	if err != nil {
+		s.logger.Warn("Resolved address is not a valid operator", "address", crypto.PubkeyToAddress(*sigPublicKey), "error", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("Resolved address is not a valid operator"))
+		return
+	} else {
+		s.logger.Warn("Resolved operator address joining raft cluster is", "address", crypto.PubkeyToAddress(*sigPublicKey))
 	}
 
-	// 1 - Parse signed message
 	// i) Verify block number is within last 2 blocks
-	// ii) Parse signer address
-	// iii) verify signer is valid operator
 
-	if err := s.priceFSM.Join(nodeID, remoteAddr); err != nil {
+	nodeID := crypto.PubkeyToAddress(*sigPublicKey).String()
+
+	if err := s.priceFSM.Join(nodeID, validOperatorUrls.RpcUrl); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Service) handlePriceUpdateTaskSubmittion(w http.ResponseWriter, r *http.Request) {

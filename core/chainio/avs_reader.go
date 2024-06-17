@@ -25,6 +25,10 @@ type AvsReaderer interface {
 	GetErc20Mock(ctx context.Context, tokenAddr gethcommon.Address) (*erc20mock.ContractERC20Mock, error)
 	GetRegistedOperatorUrls(ctx context.Context) (*csserviceManager.ContractIncredibleSquaringServiceManagerOperatorUrlRegisteredIterator, error)
 	IsValidOperator(ctx context.Context, operatorAddress gethcommon.Address) (bool, error)
+	FetchOperatorUrl(ctx context.Context, operatorAddress gethcommon.Address) (struct {
+		HttpUrl string
+		RpcUrl  string
+	}, error)
 }
 
 type AvsReader struct {
@@ -84,5 +88,12 @@ func (r *AvsReader) GetRegistedOperatorUrls(ctx context.Context) (*csserviceMana
 }
 
 func (r *AvsReader) IsValidOperator(ctx context.Context, operatorAddress gethcommon.Address) (bool, error) {
-	return r.AvsServiceBindings.TaskManager.IsValidOperator(&bind.CallOpts{}, operatorAddress)
+	return r.AvsServiceBindings.ServiceManager.IsValidOperator(&bind.CallOpts{}, operatorAddress)
+}
+
+func (r *AvsReader) FetchOperatorUrl(ctx context.Context, operatorAddress gethcommon.Address) (struct {
+	HttpUrl string
+	RpcUrl  string
+}, error) {
+	return r.AvsServiceBindings.ServiceManager.FetchOperatorUrls(&bind.CallOpts{}, operatorAddress)
 }

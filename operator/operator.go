@@ -269,6 +269,14 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 
 	taskResponses := make(map[uint32]map[sdktypes.TaskResponseDigest]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse)
 
+	// start http server with additional raft endpoints
+	h := NewService(c.HttpBindingURI, consensusFSM, blsAggregationService, &taskResponses)
+	h.avsReader = avsReader
+	h.logger = logger
+	if err := h.Start(); err != nil {
+		logger.Error("failed to start HTTP service: %s", err.Error())
+	}
+
 	operator := &Operator{
 		config:                             c,
 		logger:                             logger,
@@ -297,12 +305,11 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 
 	if c.RegisterOperatorOnStartup {
 		operator.registerOperatorOnStartup(operatorEcdsaPrivateKey, common.HexToAddress(c.TokenStrategyAddr))
-		avsWriter.ResigterOperatorUrl(context.Background(), c.HttpBindingURI)
+		avsWriter.ResigterOperatorUrl(context.Background(), c.HttpBindingURI, c.RaftBindingURI)
+		time.Sleep(5 * time.Second) // Ensure operator is registered
 	}
 
 	// Setup raft
-
-	// 3) Bootstrap cluster if no previous opertorId found
 	consensusFSM.RaftBind = c.RaftBindingURI
 	consensusFSM.RaftDir = c.RaftDirectoryPath
 	consensusFSM.RaftHttpBind = c.HttpBindingURI
@@ -327,7 +334,7 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 			results.Next()
 			continue
 		} else {
-			url := event.Url
+			url := event.HttpUrl
 
 			logger.Info("Attempting to join existing raft cluster", "joinUrl", url)
 
@@ -347,14 +354,7 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 
 	if !hasJoinedCluster {
 		consensusFSM.Initialize(true, c.OperatorAddress)
-	}
-
-	// start http server with additional raft endpoints
-	h := NewService(c.HttpBindingURI, consensusFSM, blsAggregationService, &taskResponses)
-	h.avsReader = avsReader
-	h.logger = logger
-	if err := h.Start(); err != nil {
-		logger.Error("failed to start HTTP service: %s", err.Error())
+		logger.Info("Attempting to bootstrap raft cluster")
 	}
 
 	// OperatorId is set in contract during registration so we get it after registering operator.
