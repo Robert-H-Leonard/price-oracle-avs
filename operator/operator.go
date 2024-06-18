@@ -357,6 +357,9 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 	if !hasJoinedCluster && !hasError {
 		consensusFSM.Initialize(true, c.OperatorAddress)
 		logger.Info("Attempting to bootstrap raft cluster")
+	} else {
+		logger.Error("Failed to join existing raft cluster")
+		return nil, err
 	}
 
 	// OperatorId is set in contract during registration so we get it after registering operator.
