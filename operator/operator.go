@@ -357,7 +357,7 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 	if !hasJoinedCluster && !hasError {
 		consensusFSM.Initialize(true, c.OperatorAddress)
 		logger.Info("Attempting to bootstrap raft cluster")
-	} else {
+	} else if !hasJoinedCluster && hasError {
 		logger.Error("Failed to join existing raft cluster")
 		return nil, err
 	}
