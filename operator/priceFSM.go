@@ -219,47 +219,57 @@ type fsmSnapshot struct {
 	priceData map[string]int
 }
 
-// Triggers operator to fetch the requested price feed and sumbit to leader
 func (f *fsm) Apply(l *raft.Log) interface{} {
 
-	// Leader does not respond to task request from themselves
-	leaderURL, _ := f.raft.LeaderWithID()
+    // Leader does not respond to task request from themselves
+    leaderURL, _ := f.raft.LeaderWithID()
 
-	if string(leaderURL) == f.RaftBind {
-		return nil
-	}
+    if string(leaderURL) == f.RaftBind {
+        return nil
+    }
 
-	lastAppliedIndex := f.raft.AppliedIndex()
+    lastAppliedIndex := f.raft.AppliedIndex()
 
-	if l.Index < lastAppliedIndex {
-		return nil // No need to replay previous logs
-	}
+    if l.Index < lastAppliedIndex {
+        return nil // No need to replay previous logs
+    }
 
-	var request PriceUpdateRequest
-	if err := json.Unmarshal(l.Data, &request); err != nil {
-		panic(fmt.Sprintf("failed to unmarshal command: %s", err.Error()))
-	}
+    var request PriceUpdateRequest
+    if err := json.Unmarshal(l.Data, &request); err != nil {
+        panic(fmt.Sprintf("failed to unmarshal command: %s", err.Error()))
+    }
 
-	// Fetch chainlink price
-	resolvePrice, err := f.priceFeedAdapter.GetLatestPrice(&bind.CallOpts{}, request.FeedName)
+    //fetch dia price
+    diaPrice, err := f.priceFeedAdapter.GetPriceDia(&bind.CallOpts{}, request.FeedName)
 
-	if err != nil {
-		f.logger.Printf("Failed to fetch price", "err", err)
-		return nil
-	}
+    if err != nil {
+        f.logger.Printf("Failed to fetch price", "err", err)
+        return nil
+    
+    }
+    diaResponse := PriceUpdateTaskResponse{Price: uint32(diaPrice.Uint64()), Source: "dia", TaskId: request.TaskId, Decimals: 18}
 
-	response := []PriceUpdateTaskResponse{} // slice will automatically resize if needed
+    // Fetch chainlink price
+    resolvePrice, err := f.priceFeedAdapter.GetLatestPrice(&bind.CallOpts{}, request.FeedName)
 
-	chainlinkResponse := PriceUpdateTaskResponse{Price: uint32(resolvePrice.Uint64()), Source: "chainlink", TaskId: request.TaskId, Decimals: 18}
+    if err != nil {
+        f.logger.Printf("Failed to fetch price", "err", err)
+        return nil
+    }
 
-	f.logger.Printf("Chainlink response: %v", chainlinkResponse)
-	response = append(response, chainlinkResponse)
+    response := []PriceUpdateTaskResponse{} // slice will automatically resize if needed
 
-	if err := f.SubmitTaskToLeader(request, response, request.LeaderUrl); err != nil {
-		f.logger.Printf("Failed to submit task response", "err", err)
-	}
+    chainlinkResponse := PriceUpdateTaskResponse{Price: uint32(resolvePrice.Uint64()), Source: "chainlink", TaskId: request.TaskId, Decimals: 18}
 
-	return nil
+    f.logger.Printf("Chainlink response: %v", chainlinkResponse)
+    f.logger.Printf("Dia response: %v", diaResponse)
+    response = append(response,chainlinkResponse, diaResponse)
+
+    if err := f.SubmitTaskToLeader(request, response, request.LeaderUrl); err != nil {
+        f.logger.Printf("Failed to submit task response", "err", err)
+    }
+
+    return nil
 }
 
 func (f *fsm) SubmitTaskToLeader(request PriceUpdateRequest, responses []PriceUpdateTaskResponse, leaderUrl string) error {

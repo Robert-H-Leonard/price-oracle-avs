@@ -20,10 +20,11 @@ contract PriceAdapterTest {
 
         // BTC/USD on sepolia
         priceFeedAdapter.addFeed("BTC/USD", address(0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43));
+        priceFeedAdapter.setDiaOracleAddress(address(0xCD5F78206ca1FF96Ff4c043C61a2299B2Febf3cB));
     }
 
     function test_fetch_btc_usd_price() public {
         emit TestValue(priceFeedAdapter.getLatestPrice("BTC/USD"));
-        priceFeedAdapter.getPriceDia("BTC/USD", 1715446929); // https://www.unixtimestamp.com/
+       priceFeedAdapter.getPriceDia("BTC/USD"); // https://www.unixtimestamp.com/
     }
 }

@@ -1,4 +1,3 @@
-
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.12;
 
@@ -12,12 +11,13 @@ interface IDIAOracleV2{
 contract PriceFeedAdapter is Ownable {
     mapping(string => AggregatorV3Interface) public feeds;
 
-    address immutable diaORACLE = 0xCD5F78206ca1FF96Ff4c043C61a2299B2Febf3cB; // sepolia
+    address public diaOracle;  //0xCD5F78206ca1FF96Ff4c043C61a2299B2Febf3cB; // sepolia
 
     event FeedAdded(string symbol, address feedAddress);
     event FeedRemoved(string symbol);
     event chainlinkAdapterPrice(string symbol, int256 _ChainlinkAdapterPrice);
     event diaAdapterPrice(string symbol, uint128 _DiaAdapterPrice);
+    event diaOracleAddress(string symbol, address _DiaOracleAddress);
 
     function addFeed(string memory _symbol, address _feedAddress) external onlyOwner {
         require(_feedAddress != address(0), "Feed address cannot be zero.");
@@ -25,6 +25,15 @@ contract PriceFeedAdapter is Ownable {
         feeds[_symbol] = AggregatorV3Interface(_feedAddress);
         emit FeedAdded(_symbol, _feedAddress);
     }
+
+    function setDiaOracleAddress(address _diaOracle) external onlyOwner {
+        require(_diaOracle != address(0), "Dia Oracle address cannot be zero.");
+        diaOracle = _diaOracle;
+        emit diaOracleAddress("Dia Oracle Address", _diaOracle);
+
+    }
+
+    
 
     function removeFeed(string memory _symbol) external onlyOwner {
         require(address(feeds[_symbol]) != address(0), "Feed not found.");
@@ -40,7 +49,8 @@ contract PriceFeedAdapter is Ownable {
         return price;
     }
 
-    function getPriceDia(string memory _symbol, uint128 _timestampOflatestPrice) external view {
-        (, _timestampOflatestPrice) = IDIAOracleV2(diaORACLE).getValue(_symbol);
+    function getPriceDia(string memory _symbol) external view returns (uint128 Price){
+        (, Price) = IDIAOracleV2(diaOracle).getValue(_symbol);
+        return Price;
     }
 }
