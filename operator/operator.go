@@ -492,10 +492,7 @@ func (o *Operator) ProcessNewPriceUpdateCreatedLog(newPriceUpdateTaskCreatedLog 
 		o.logger.Error("Failed to request task", "err", err)
 	}
 
-	// Leader sends request to follower operators
-	o.priceFSM.raft.Apply(dataBytes, raftTimeout)
-
-	o.logger.Info("Task request sent to followers")
+	o.priceFSM.LeaderSendTaskRequestToFollowers(dataBytes)
 	return err
 }
 
@@ -642,30 +639,41 @@ func contains(s []string, str string) bool {
 }
 
 func (o *Operator) operatorOnTaskRequested(taskRequest PriceUpdateRequest) ([]PriceUpdateTaskResponse, error) {
-	//fetch dia price
-	diaPrice, err := o.priceFeedAdapter.GetPriceDia(&bind.CallOpts{}, taskRequest.FeedName)
 
-	if err != nil {
-		o.logger.Warn("Failed to fetch price", "err", err)
-		return make([]PriceUpdateTaskResponse, 0), err
-	}
-	diaResponse := PriceUpdateTaskResponse{Price: uint32(diaPrice.Uint64()), Source: "dia", TaskId: taskRequest.TaskId, Decimals: 8}
+	var chainlinkResponse PriceUpdateTaskResponse = PriceUpdateTaskResponse{}
+	var diaResponse PriceUpdateTaskResponse = PriceUpdateTaskResponse{}
+
+	response := []PriceUpdateTaskResponse{} // slice will automatically resize if needed
 
 	// Fetch chainlink price
 	resolvePrice, err := o.priceFeedAdapter.GetLatestPrice(&bind.CallOpts{}, taskRequest.FeedName)
 
 	if err != nil {
-		o.logger.Warn("Failed to fetch price", "err", err)
-		return make([]PriceUpdateTaskResponse, 0), err
+		o.logger.Warn("Failed to fetch price on chainlink", "err", err)
+	} else {
+		chainlinkResponse = PriceUpdateTaskResponse{Price: uint32(resolvePrice.Uint64()), Source: "chainlink", TaskId: taskRequest.TaskId, Decimals: 18}
 	}
 
-	response := []PriceUpdateTaskResponse{} // slice will automatically resize if needed
+	//fetch dia price
+	diaPrice, err := o.priceFeedAdapter.GetPriceDia(&bind.CallOpts{}, taskRequest.FeedName)
 
-	chainlinkResponse := PriceUpdateTaskResponse{Price: uint32(resolvePrice.Uint64()), Source: "chainlink", TaskId: taskRequest.TaskId, Decimals: 18}
+	if err != nil {
+		o.logger.Warn("Failed to fetch price dia", "err", err)
+	} else {
+		diaResponse = PriceUpdateTaskResponse{Price: uint32(diaPrice.Uint64()), Source: "dia", TaskId: taskRequest.TaskId, Decimals: 8}
+	}
 
-	o.logger.Info("Chainlink response for feed %s: %v", taskRequest.FeedName, chainlinkResponse)
-	o.logger.Info("Dia response for feed %s : %v", taskRequest.FeedName, diaResponse)
-	response = append(response, chainlinkResponse, diaResponse)
+	empty := PriceUpdateTaskResponse{}
+
+	if chainlinkResponse != empty {
+		o.logger.Info("Chainlink response for feed received")
+		response = append(response, chainlinkResponse)
+	}
+
+	if diaResponse != empty {
+		o.logger.Info("Dia response for feed received")
+		response = append(response, diaResponse)
+	}
 
 	return response, nil
 }

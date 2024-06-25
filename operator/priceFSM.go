@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/Layr-Labs/eigensdk-go/crypto/bls"
@@ -44,13 +43,11 @@ type onSubmitTaskToLeader[T any, K any, S any] func(taskRequest T, taskResponse 
 // Type K is the task response submitted from followers to the leader
 // Type S is the bls signed response type submitted to the leader
 type PriceFSM[T any, K any, S any] struct {
-	RaftDir      string // Directory for operator raft logs
-	RaftBind     string // rpc host:port used by the operator for raft protocol
-	RaftHttpBind string // http host:port for custom server for custom raft logic
-	raft         *raft.Raft
-	mu           sync.Mutex
-	logger       *log.Logger
-	// needed to fetch the price of assets on different on-chain oracle networks
+	RaftDir         string // Directory for operator raft logs
+	RaftBind        string // rpc host:port used by the operator for raft protocol
+	RaftHttpBind    string // http host:port for custom server for custom raft logic
+	raft            *raft.Raft
+	logger          *log.Logger
 	blsKeypair      *bls.KeyPair
 	operatorId      sdktypes.OperatorId
 	privateKey      *ecdsa.PrivateKey
@@ -232,6 +229,14 @@ func (p *PriceFSM[T, K, S]) SubmitTaskToLeader(request T, responses K) error {
 	log.Printf("Submitted task to %s:", leaderUrl)
 	defer resp.Body.Close()
 	return nil
+}
+
+func (p *PriceFSM[T, K, S]) LeaderSendTaskRequestToFollowers(cmd []byte) error {
+	// Only the leader can apply a message that is sent to all followers
+	resp := p.raft.Apply(cmd, raftTimeout)
+
+	p.logger.Printf("Task request sent to followers")
+	return resp.Error()
 }
 
 /// Raft protocol integration. The below code is the implementation of the finite state machine used by the raft protocol: https://github.com/hashicorp/raft
