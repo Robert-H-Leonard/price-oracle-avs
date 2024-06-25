@@ -88,7 +88,7 @@ type Operator struct {
 	// needed to fetch the price of assets on different on-chain oracle networks
 	priceFeedAdapter *priceFeedAdapter.ContractPriceFeedAdapter
 
-	priceFSM *PriceFSM
+	priceFSM *PriceFSM[PriceUpdateRequest, []PriceUpdateTaskResponse, SignedTaskResponse[PriceUpdateTaskResponse]]
 }
 
 type PriceUpdateRequest struct {
@@ -258,7 +258,7 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 	}
 
 	// setup raft consensus client
-	consensusFSM := NewConcensusFSM(priceFeedClient, blsKeyPair, operatorEcdsaPrivateKey)
+	consensusFSM := NewConcensusFSM[PriceUpdateRequest, []PriceUpdateTaskResponse, SignedTaskResponse[PriceUpdateTaskResponse]](blsKeyPair, operatorEcdsaPrivateKey)
 
 	taskResponses := make(map[uint32]map[sdktypes.TaskResponseDigest]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse)
 
@@ -306,6 +306,8 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 	consensusFSM.RaftBind = c.RaftBindingURI
 	consensusFSM.RaftDir = c.RaftDirectoryPath
 	consensusFSM.RaftHttpBind = c.HttpBindingURI
+	consensusFSM.onTaskRequestFn = operator.operatorOnTaskRequested
+	consensusFSM.onTaskResonseFn = operator.operatorOnTaskResponse
 
 	// Check for past operators via OperatorRegistered event on ServiceManager
 	results, err := avsReader.GetRegistedOperatorUrls(context.Background())
@@ -632,4 +634,63 @@ func contains(s []string, str string) bool {
 	}
 
 	return false
+}
+
+func (o *Operator) operatorOnTaskRequested(taskRequest PriceUpdateRequest) ([]PriceUpdateTaskResponse, error) {
+	//fetch dia price
+	diaPrice, err := o.priceFeedAdapter.GetPriceDia(&bind.CallOpts{}, taskRequest.FeedName)
+
+	if err != nil {
+		o.logger.Warn("Failed to fetch price", "err", err)
+		return make([]PriceUpdateTaskResponse, 0), err
+	}
+	diaResponse := PriceUpdateTaskResponse{Price: uint32(diaPrice.Uint64()), Source: "dia", TaskId: taskRequest.TaskId, Decimals: 8}
+
+	// Fetch chainlink price
+	resolvePrice, err := o.priceFeedAdapter.GetLatestPrice(&bind.CallOpts{}, taskRequest.FeedName)
+
+	if err != nil {
+		o.logger.Warn("Failed to fetch price", "err", err)
+		return make([]PriceUpdateTaskResponse, 0), err
+	}
+
+	response := []PriceUpdateTaskResponse{} // slice will automatically resize if needed
+
+	chainlinkResponse := PriceUpdateTaskResponse{Price: uint32(resolvePrice.Uint64()), Source: "chainlink", TaskId: taskRequest.TaskId, Decimals: 18}
+
+	o.logger.Info("Chainlink response for feed %s: %v", taskRequest.FeedName, chainlinkResponse)
+	o.logger.Info("Dia response for feed %s : %v", taskRequest.FeedName, diaResponse)
+	response = append(response, chainlinkResponse, diaResponse)
+
+	return response, nil
+}
+
+func (o *Operator) operatorOnTaskResponse(taskRequest PriceUpdateRequest, taskResponses []PriceUpdateTaskResponse) (SignedTaskResponse[PriceUpdateTaskResponse], string, error) {
+	responseSignatures := []bls.Signature{}
+	signedResponses := []PriceUpdateTaskResponse{}
+
+	// Iterate over every response and sign via bls signature
+	for i, response := range taskResponses {
+		if response.Source == "" {
+			continue
+		}
+
+		o.logger.Info("Submiting response %v for task %v\n", i, response.TaskId)
+		taskResponseHash, err := core.GetTaskResponseDigest(response.Price, response.Source, response.TaskId, response.Decimals)
+		if err != nil {
+			o.logger.Info("Error getting task response header hash. skipping task (this is not expected and should be investigated)", "err", err)
+
+			var empty SignedTaskResponse[PriceUpdateTaskResponse]
+			return empty, "", err
+		}
+		responseSignatures = append(responseSignatures, *o.blsKeypair.SignMessage(taskResponseHash))
+		signedResponses = append(signedResponses, response)
+	}
+
+	signedTaskResponse := SignedTaskResponse[PriceUpdateTaskResponse]{
+		TaskResponse: signedResponses,
+		BlsSignature: responseSignatures,
+		OperatorId:   o.operatorId,
+	}
+	return signedTaskResponse, taskRequest.LeaderUrl, nil
 }

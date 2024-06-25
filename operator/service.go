@@ -34,9 +34,9 @@ type Service struct {
 	logger                logging.Logger
 	priceFSM              IPriceFSM
 	taskResponsesMu       sync.RWMutex
-	taskResponses         *map[uint32]map[sdktypes.TaskResponseDigest]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse
+	taskResponses         *map[uint32]map[sdktypes.TaskResponseDigest]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse //generic
 	blsAggregationService blsagg.BlsAggregationService
-	avsReader             chainio.AvsReaderer
+	avsReader             chainio.AvsReaderer // generic avs reader
 	ethClient             eth.Client
 }
 
@@ -138,7 +138,7 @@ func (s *Service) handleJoin(w http.ResponseWriter, r *http.Request) {
 		s.logger.Warn("Failed to parse operator signature", "err", err)
 	}
 
-	validOperatorUrls, err := s.avsReader.FetchOperatorUrl(context.Background(), crypto.PubkeyToAddress(*sigPublicKey))
+	validOperatorUrls, err := s.avsReader.FetchOperatorUrl(context.Background(), crypto.PubkeyToAddress(*sigPublicKey)) // generic callbacks (1. Validate operator address. 2. Fetch operator urls)
 
 	if err != nil {
 		s.logger.Warn("Resolved address is not a valid operator", "address", crypto.PubkeyToAddress(*sigPublicKey), "error", err)
@@ -182,7 +182,7 @@ func (s *Service) handleJoin(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Service) handlePriceUpdateTaskSubmittion(w http.ResponseWriter, r *http.Request) {
+func (s *Service) handlePriceUpdateTaskSubmittion(w http.ResponseWriter, r *http.Request) { // handle task submission with 2 generic + 1 callback
 
 	var signedResponse SignedTaskResponse
 
@@ -216,6 +216,7 @@ func (s *Service) handlePriceUpdateTaskSubmittion(w http.ResponseWriter, r *http
 		}
 		s.taskResponsesMu.Unlock()
 
+		// Keep only the below code
 		err = s.blsAggregationService.ProcessNewSignature(
 			context.Background(), taskIndex, taskResponseDigest,
 			&signature, signedResponse.OperatorId,
