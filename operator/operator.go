@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -262,14 +263,6 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 
 	taskResponses := make(map[uint32]map[sdktypes.TaskResponseDigest]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse)
 
-	// start http server with additional raft endpoints
-	h := NewService(c.HttpBindingURI, consensusFSM, blsAggregationService, &taskResponses, ethRpcClient)
-	h.avsReader = avsReader
-	h.logger = logger
-	if err := h.Start(); err != nil {
-		logger.Error("failed to start HTTP service: %s", err.Error())
-	}
-
 	operator := &Operator{
 		config:                             c,
 		logger:                             logger,
@@ -296,6 +289,17 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 		taskDigestQuorum:                   make(map[uint32]TaskDigestQuorum),
 	}
 
+	// start http server with additional raft endpoints
+	h := NewService[PriceUpdateTaskResponse](c.HttpBindingURI, consensusFSM, blsAggregationService, ethRpcClient)
+	h.logger = logger
+	h.onLeaderProcessBlsSignedResponse = operator.operatorLeaderSubmitBlsResponse
+	h.isValidOperator = operator.isValidOperator
+	h.fetchOperatorUrl = operator.fetchOperatorUrl
+
+	if err := h.Start(); err != nil {
+		logger.Error("failed to start HTTP service: %s", err.Error())
+	}
+
 	if c.RegisterOperatorOnStartup {
 		operator.registerOperatorOnStartup(operatorEcdsaPrivateKey, common.HexToAddress(c.TokenStrategyAddr))
 		avsWriter.ResigterOperatorUrl(context.Background(), c.HttpBindingURI, c.RaftBindingURI)
@@ -311,6 +315,7 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 
 	// Check for past operators via OperatorRegistered event on ServiceManager
 	results, err := avsReader.GetRegistedOperatorUrls(context.Background())
+
 	results.Next() // First log is always empty so skip it https://stackoverflow.com/questions/62831835/go-ethereum-ethclient-cannot-get-event-logs-data
 
 	if err != nil {
@@ -693,4 +698,65 @@ func (o *Operator) operatorOnTaskResponse(taskRequest PriceUpdateRequest, taskRe
 		OperatorId:   o.operatorId,
 	}
 	return signedTaskResponse, taskRequest.LeaderUrl, nil
+}
+
+func (o *Operator) operatorLeaderSubmitBlsResponse(task PriceUpdateTaskResponse, w http.ResponseWriter) (taskIndex uint32, taskResponseDigest [32]byte) {
+	// Submit each price feed source seperatly
+	o.logger.Info("Preparing to submit bls signatures")
+	currentTaskIndex := task.TaskId
+	taskResponseDigest, err := core.GetTaskResponseDigest(task.Price, task.Source, task.TaskId, task.Decimals)
+	if err != nil {
+		o.logger.Error("Failed to get task response digest", "err", err)
+		w.WriteHeader(http.StatusBadGateway)
+	}
+	o.taskResponsesMu.Lock()
+
+	if _, ok := (o.taskResponses)[currentTaskIndex]; !ok {
+		(o.taskResponses)[currentTaskIndex] = make(map[sdktypes.TaskResponseDigest]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse)
+	}
+	if _, ok := (o.taskResponses)[currentTaskIndex][taskResponseDigest]; !ok {
+		(o.taskResponses)[currentTaskIndex][taskResponseDigest] = cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse{
+			Price:    uint32(task.Price),
+			Decimals: 18,
+			Source:   task.Source,
+			TaskId:   task.TaskId,
+		}
+	}
+	o.taskResponsesMu.Unlock()
+	return currentTaskIndex, taskResponseDigest
+}
+
+func (o *Operator) isValidOperator(operatorAddress common.Address) (bool, error) {
+	validOperatorUrls, err := o.avsReader.FetchOperatorUrl(context.Background(), operatorAddress) // generic callbacks (1. Validate operator address. 2. Fetch operator urls)
+
+	if err != nil {
+		o.logger.Warn("Resolved address is not a valid operator", "address", operatorAddress, "error", err)
+		return false, err
+	}
+
+	empty := struct {
+		HttpUrl string
+		RpcUrl  string
+	}{}
+
+	isValid := validOperatorUrls != empty
+
+	return isValid, nil
+}
+
+func (o *Operator) fetchOperatorUrl(operatorAddress common.Address) (struct {
+	HttpUrl string
+	RpcUrl  string
+}, error) {
+	validOperatorUrls, err := o.avsReader.FetchOperatorUrl(context.Background(), operatorAddress) // generic callbacks (1. Validate operator address. 2. Fetch operator urls)
+
+	if err != nil {
+		o.logger.Warn("Failed to fetch url for operator", "address", operatorAddress, "error", err)
+		return struct {
+			HttpUrl string
+			RpcUrl  string
+		}{}, err
+	}
+
+	return validOperatorUrls, nil
 }

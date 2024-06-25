@@ -150,7 +150,7 @@ func (p *PriceFSM[T, K, S]) Initialize(enableSingle bool, localId string) error 
 	stableStore = boltDB
 
 	// Instantiate the Raft systems.
-	ra, err := raft.NewRaft(config, (*fsm)(p), logStore, stableStore, snapshots, transport)
+	ra, err := raft.NewRaft(config, (raft.FSM)(p), logStore, stableStore, snapshots, transport)
 	if err != nil {
 		return fmt.Errorf("new raft: %s", err)
 	}
@@ -217,14 +217,29 @@ func (p *PriceFSM[T, K, S]) TriggerElection() {
 	p.raft.LeadershipTransfer()
 }
 
-/// Raft protocol integration. The below code is the implementation of the finite state machine used by the raft protocol: https://github.com/hashicorp/raft
+func (p *PriceFSM[T, K, S]) SubmitTaskToLeader(request T, responses K) error {
+	signedTaskResponse, leaderUrl, err := p.onTaskResonseFn(request, responses)
 
-type fsm PriceFSM[any, any, any]
+	b, err := json.Marshal(signedTaskResponse)
+	if err != nil {
+		return err
+	}
+	resp, err := http.Post(fmt.Sprintf("http://%s/submitAvsTask", leaderUrl), "application-type/json", bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+
+	log.Printf("Submitted task to %s:", leaderUrl)
+	defer resp.Body.Close()
+	return nil
+}
+
+/// Raft protocol integration. The below code is the implementation of the finite state machine used by the raft protocol: https://github.com/hashicorp/raft
 
 type fsmSnapshot struct {
 }
 
-func (f *fsm) Apply(l *raft.Log) interface{} {
+func (f *PriceFSM[T, K, S]) Apply(l *raft.Log) interface{} {
 
 	// Leader does not respond to task request from themselves
 	leaderURL, _ := f.raft.LeaderWithID()
@@ -239,7 +254,7 @@ func (f *fsm) Apply(l *raft.Log) interface{} {
 		return nil // No need to replay previous logs
 	}
 
-	var request any
+	var request T
 	if err := json.Unmarshal(l.Data, &request); err != nil {
 		panic(fmt.Sprintf("failed to unmarshal command: %s", err.Error()))
 	}
@@ -258,29 +273,12 @@ func (f *fsm) Apply(l *raft.Log) interface{} {
 	return nil
 }
 
-func (f *fsm) SubmitTaskToLeader(request any, responses any) error {
-	signedTaskResponse, leaderUrl, err := f.onTaskResonseFn(request, responses)
-
-	b, err := json.Marshal(signedTaskResponse)
-	if err != nil {
-		return err
-	}
-	resp, err := http.Post(fmt.Sprintf("http://%s/submitAvsTask", leaderUrl), "application-type/json", bytes.NewReader(b))
-	if err != nil {
-		return err
-	}
-
-	log.Printf("Submitted task to %s:", leaderUrl)
-	defer resp.Body.Close()
-	return nil
-}
-
-func (f *fsm) Snapshot() (raft.FSMSnapshot, error) {
+func (f *PriceFSM[T, K, S]) Snapshot() (raft.FSMSnapshot, error) {
 	return &fsmSnapshot{}, nil
 }
 
 // Restore stores the key-value store to a previous state.
-func (f *fsm) Restore(rc io.ReadCloser) error {
+func (f *PriceFSM[T, K, S]) Restore(rc io.ReadCloser) error {
 	return nil
 }
 
