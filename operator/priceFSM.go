@@ -16,7 +16,10 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Layr-Labs/eigensdk-go/chainio/clients/eth"
 	"github.com/Layr-Labs/eigensdk-go/crypto/bls"
+	"github.com/Layr-Labs/eigensdk-go/logging"
+	blsagg "github.com/Layr-Labs/eigensdk-go/services/bls_aggregation"
 	sdktypes "github.com/Layr-Labs/eigensdk-go/types"
 
 	"github.com/ethereum/go-ethereum/crypto"
@@ -43,24 +46,55 @@ type onSubmitTaskToLeader[T any, K any, S any] func(taskRequest T, taskResponse 
 // Type K is the task response submitted from followers to the leader
 // Type S is the bls signed response type submitted to the leader
 type PriceFSM[T any, K any, S any] struct {
-	RaftDir         string // Directory for operator raft logs
-	RaftBind        string // rpc host:port used by the operator for raft protocol
-	RaftHttpBind    string // http host:port for custom server for custom raft logic
-	raft            *raft.Raft
-	logger          *log.Logger
-	blsKeypair      *bls.KeyPair
-	operatorId      sdktypes.OperatorId
-	privateKey      *ecdsa.PrivateKey
-	onTaskRequestFn onTaskRequest[T, K]
-	onTaskResonseFn onSubmitTaskToLeader[T, K, S]
+	RaftDir      string // Directory for operator raft logs
+	RaftBind     string // rpc host:port used by the operator for raft protocol
+	RaftHttpBind string // http host:port for custom server for custom raft logic
+	raft         *raft.Raft
+	logger       logging.Logger
+	blsKeypair   *bls.KeyPair
+
+	// AVS specific dependencies
+	operatorId       sdktypes.OperatorId
+	privateKey       *ecdsa.PrivateKey
+	onTaskRequestFn  onTaskRequest[T, K]
+	onTaskResponseFn onSubmitTaskToLeader[T, K, S]
+
+	// HTTP server dependencies
+	httpRaftServer        *Service[K]
+	ethClient             eth.Client
+	blsAggregationService blsagg.BlsAggregationService
 }
 
-func NewConcensusFSM[T any, K any, S any](keyPair *bls.KeyPair, pk *ecdsa.PrivateKey) *PriceFSM[T, K, S] {
+func NewConcensusFSM[T any, K any, S any](keyPair *bls.KeyPair, pk *ecdsa.PrivateKey, blsAggregationService blsagg.BlsAggregationService, ethClient eth.Client, logger logging.Logger) *PriceFSM[T, K, S] {
 	return &PriceFSM[T, K, S]{
-		logger:     log.New(os.Stderr, "[operator-consensus] ", log.LstdFlags), // Update logger to be the same as operator                                               // Replace with callbacks
-		blsKeypair: keyPair,
-		privateKey: pk,
+		logger:                logger, // Update logger to be the same as operator                                               // Replace with callbacks
+		blsKeypair:            keyPair,
+		privateKey:            pk,
+		ethClient:             ethClient,
+		blsAggregationService: blsAggregationService,
 	}
+}
+
+func (p *PriceFSM[T, K, S]) InitializeHttpServer(addr string, onLeaderProcessBlsSignedResponse onLeaderProcessBlsSignedResponse[K], isValidOperator isValidOperator, fetchOperatorUrl fetchOperatorUrl) error {
+	h := &Service[K]{
+		addr:                             addr,
+		priceFSM:                         p,
+		blsAggregationService:            p.blsAggregationService,
+		ethClient:                        p.ethClient,
+		onLeaderProcessBlsSignedResponse: onLeaderProcessBlsSignedResponse,
+		isValidOperator:                  isValidOperator,
+		fetchOperatorUrl:                 fetchOperatorUrl,
+		logger:                           p.logger,
+	}
+
+	if err := h.Start(); err != nil {
+		p.logger.Error("failed to start HTTP service: %s", err.Error())
+		return err
+	}
+
+	p.httpRaftServer = h
+
+	return nil
 }
 
 func (p *PriceFSM[T, K, S]) JoinExistingNetwork(joinAddr, raftAddr, nodeID string, latestBlock uint64) error {
@@ -105,7 +139,7 @@ func (p *PriceFSM[T, K, S]) setOnTaskRequestFn(fn onTaskRequest[T, K]) {
 }
 
 func (p *PriceFSM[T, K, S]) setOnTaskResponseFn(fn onSubmitTaskToLeader[T, K, S]) {
-	p.onTaskResonseFn = fn
+	p.onTaskResponseFn = fn
 }
 
 // Operator initializes raft consenses server if enableSingle is set, and there are no existing peers,
@@ -171,11 +205,11 @@ func (p *PriceFSM[T, K, S]) Initialize(enableSingle bool, localId string) error 
 // Join joins a node, identified by nodeID and located at addr, to this store.
 // The node must be ready to respond to Raft communications at that address.
 func (p *PriceFSM[T, K, S]) Join(nodeID, addr string) error {
-	p.logger.Printf("received join request for remote node %s at %s", nodeID, addr)
+	p.logger.Info("received join request for remote node", nodeID, addr)
 
 	configFuture := p.raft.GetConfiguration()
 	if err := configFuture.Error(); err != nil {
-		p.logger.Printf("failed to get raft configuration: %v", err)
+		p.logger.Info("failed to get raft configuration:", "err", err)
 		return err
 	}
 
@@ -186,7 +220,7 @@ func (p *PriceFSM[T, K, S]) Join(nodeID, addr string) error {
 			// However if *both* the ID and the address are the same, then nothing -- not even
 			// a join operation -- is needed.
 			if srv.Address == raft.ServerAddress(addr) && srv.ID == raft.ServerID(nodeID) {
-				p.logger.Printf("node %s at %s already member of cluster, ignoring join request", nodeID, addr)
+				p.logger.Info("node already member of cluster, ignoring join request", "nodeId", nodeID, "address", addr)
 				return nil
 			}
 
@@ -201,7 +235,7 @@ func (p *PriceFSM[T, K, S]) Join(nodeID, addr string) error {
 	if f.Error() != nil {
 		return f.Error()
 	}
-	p.logger.Printf("node %s at %s joined successfully", nodeID, addr)
+	p.logger.Info("node joined successfully", "nodeId", nodeID, "address", addr)
 	return nil
 }
 
@@ -215,7 +249,7 @@ func (p *PriceFSM[T, K, S]) TriggerElection() {
 }
 
 func (p *PriceFSM[T, K, S]) SubmitTaskToLeader(request T, responses K) error {
-	signedTaskResponse, leaderUrl, err := p.onTaskResonseFn(request, responses)
+	signedTaskResponse, leaderUrl, err := p.onTaskResponseFn(request, responses)
 
 	b, err := json.Marshal(signedTaskResponse)
 	if err != nil {
@@ -235,7 +269,7 @@ func (p *PriceFSM[T, K, S]) LeaderSendTaskRequestToFollowers(cmd []byte) error {
 	// Only the leader can apply a message that is sent to all followers
 	resp := p.raft.Apply(cmd, raftTimeout)
 
-	p.logger.Printf("Task request sent to followers")
+	p.logger.Info("Task request sent to followers")
 	return resp.Error()
 }
 
@@ -272,7 +306,7 @@ func (f *PriceFSM[T, K, S]) Apply(l *raft.Log) interface{} {
 	}
 
 	if err := f.SubmitTaskToLeader(request, taskResponse); err != nil {
-		f.logger.Printf("Failed to submit task response", "err", err)
+		f.logger.Info("Failed to submit task response", "err", err)
 	}
 
 	return nil

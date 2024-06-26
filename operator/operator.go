@@ -259,7 +259,7 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 	}
 
 	// setup raft consensus client
-	consensusFSM := NewConcensusFSM[PriceUpdateRequest, []PriceUpdateTaskResponse, SignedTaskResponse[PriceUpdateTaskResponse]](blsKeyPair, operatorEcdsaPrivateKey)
+	consensusFSM := NewConcensusFSM[PriceUpdateRequest, []PriceUpdateTaskResponse, SignedTaskResponse[PriceUpdateTaskResponse]](blsKeyPair, operatorEcdsaPrivateKey, blsAggregationService, ethRpcClient, logger)
 
 	taskResponses := make(map[uint32]map[sdktypes.TaskResponseDigest]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse)
 
@@ -289,29 +289,21 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 		taskDigestQuorum:                   make(map[uint32]TaskDigestQuorum),
 	}
 
-	// start http server with additional raft endpoints
-	h := NewService[PriceUpdateTaskResponse](c.HttpBindingURI, consensusFSM, blsAggregationService, ethRpcClient)
-	h.logger = logger
-	h.onLeaderProcessBlsSignedResponse = operator.operatorLeaderSubmitBlsResponse
-	h.isValidOperator = operator.isValidOperator
-	h.fetchOperatorUrl = operator.fetchOperatorUrl
-
-	if err := h.Start(); err != nil {
-		logger.Error("failed to start HTTP service: %s", err.Error())
-	}
-
 	if c.RegisterOperatorOnStartup {
 		operator.registerOperatorOnStartup(operatorEcdsaPrivateKey, common.HexToAddress(c.TokenStrategyAddr))
 		avsWriter.ResigterOperatorUrl(context.Background(), c.HttpBindingURI, c.RaftBindingURI)
 		time.Sleep(5 * time.Second) // Ensure operator is registered
 	}
 
-	// Setup raft
+	// start http server with additional raft endpoints
+	consensusFSM.InitializeHttpServer(c.HttpBindingURI, operator.operatorLeaderSubmitBlsResponse, operator.isValidOperator, operator.fetchOperatorUrl)
+
+	// Setup raft cluster config
 	consensusFSM.RaftBind = c.RaftBindingURI
 	consensusFSM.RaftDir = c.RaftDirectoryPath
 	consensusFSM.RaftHttpBind = c.HttpBindingURI
 	consensusFSM.onTaskRequestFn = operator.operatorOnTaskRequested
-	consensusFSM.onTaskResonseFn = operator.operatorOnTaskResponse
+	consensusFSM.onTaskResponseFn = operator.operatorOnTaskResponse
 
 	// Check for past operators via OperatorRegistered event on ServiceManager
 	results, err := avsReader.GetRegistedOperatorUrls(context.Background())
@@ -323,10 +315,10 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 	}
 
 	// If operator is joining an existing raft network make request to join
-	// iterate over up to 10 urls
 	hasJoinedCluster := false
 	hasError := false
 
+	// Attempt to join existing operator raft cluster if it exist
 	for i := 0; i < 10; i++ {
 		event := results.Event
 
@@ -347,11 +339,11 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 
 			logger.Info("Attempting to join existing raft cluster", "joinUrl", url)
 
-			// initialize raft consensus server
+			// initialize raft consensus  rpc server
 			consensusFSM.Initialize(false, c.OperatorAddress)
 
 			if err := consensusFSM.JoinExistingNetwork(url, c.RaftBindingURI, c.OperatorAddress, blockNumber); err != nil {
-				logger.Warn("failed to join node at", "url", url, "err", err)
+				logger.Warn("failed to join node at", "url", url, "operatorId", event.OperatorId.String(), "err", err)
 				hasError = true
 				results.Next()
 			}
@@ -413,7 +405,7 @@ func (o *Operator) Start(ctx context.Context) error {
 		metricsErrChan = make(chan error, 1)
 	}
 
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(20 * time.Second)
 	defer ticker.Stop()
 
 	// TODO(samlaf): wrap this call with increase in avs-node-spec metric
@@ -650,6 +642,7 @@ func (o *Operator) operatorOnTaskRequested(taskRequest PriceUpdateRequest) ([]Pr
 
 	if err != nil {
 		o.logger.Warn("Failed to fetch price on chainlink", "err", err)
+		err = nil
 	} else {
 		chainlinkResponse = PriceUpdateTaskResponse{Price: uint32(resolvePrice.Uint64()), Source: "chainlink", TaskId: taskRequest.TaskId, Decimals: 18}
 	}
@@ -659,6 +652,7 @@ func (o *Operator) operatorOnTaskRequested(taskRequest PriceUpdateRequest) ([]Pr
 
 	if err != nil {
 		o.logger.Warn("Failed to fetch price dia", "err", err)
+		err = nil
 	} else {
 		diaResponse = PriceUpdateTaskResponse{Price: uint32(diaPrice.Uint64()), Source: "dia", TaskId: taskRequest.TaskId, Decimals: 8}
 	}
@@ -683,12 +677,12 @@ func (o *Operator) operatorOnTaskResponse(taskRequest PriceUpdateRequest, taskRe
 	signedResponses := []PriceUpdateTaskResponse{}
 
 	// Iterate over every response and sign via bls signature
-	for i, response := range taskResponses {
+	for _, response := range taskResponses {
 		if response.Source == "" {
 			continue
 		}
 
-		o.logger.Info("Submiting response %v for task %v\n", i, response.TaskId)
+		o.logger.Info("Submiting response for task", "taskId", response.TaskId, "source", response.Source)
 		taskResponseHash, err := core.GetTaskResponseDigest(response.Price, response.Source, response.TaskId, response.Decimals)
 		if err != nil {
 			o.logger.Info("Error getting task response header hash. skipping task (this is not expected and should be investigated)", "err", err)
@@ -708,9 +702,12 @@ func (o *Operator) operatorOnTaskResponse(taskRequest PriceUpdateRequest, taskRe
 	return signedTaskResponse, taskRequest.LeaderUrl, nil
 }
 
-func (o *Operator) operatorLeaderSubmitBlsResponse(task PriceUpdateTaskResponse, w http.ResponseWriter) (taskIndex uint32, taskResponseDigest [32]byte) {
+func (o *Operator) operatorLeaderSubmitBlsResponse(tasks []PriceUpdateTaskResponse, w http.ResponseWriter) (taskIndex uint32, taskResponseDigest [32]byte) {
 	// Submit each price feed source seperatly
 	o.logger.Info("Preparing to submit bls signatures")
+
+	task := tasks[0] // We only submit 1 bls response at a time
+
 	currentTaskIndex := task.TaskId
 	taskResponseDigest, err := core.GetTaskResponseDigest(task.Price, task.Source, task.TaskId, task.Decimals)
 	if err != nil {
