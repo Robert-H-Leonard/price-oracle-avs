@@ -22,14 +22,14 @@ contract IncredibleSquaringTaskManager is
 {
     using BN254 for BN254.G1Point;
 
-    /* CONSTANT */
     // The number of blocks from the task initialization within which the aggregator has to respond to
     uint32 public immutable TASK_RESPONSE_WINDOW_BLOCK;
     uint32 public constant TASK_CHALLENGE_WINDOW_BLOCK = 100;
     uint256 internal constant _THRESHOLD_DENOMINATOR = 100;
 
-    string public ETH_USDC_FEED_NAME = "eth/usdc";
-    string public BTC_USDC_FEED_NAME = "btc/usdc";
+    // Task parameters used by operators
+    uint public DEFAULT_QUORUM_THRESHOLD = 33;
+    uint public DEFAULT_REQUIRED_NUM_OF_SOURCES = 2;
 
     /* STORAGE */
     // The latest task index
@@ -43,8 +43,6 @@ contract IncredibleSquaringTaskManager is
 
     // mapping of task indices to hash of abi.encode([] taskResponse, taskResponseMetadata)
     mapping(uint32 => bytes32[]) public allTaskResponses;
-
-    mapping(uint32 => bool) public taskSuccesfullyChallenged;
 
     mapping(string => AggregatedPrice) private aggregatedPriceFeed;
 
@@ -208,9 +206,6 @@ contract IncredibleSquaringTaskManager is
         return latestTaskNum;
     }
 
-    // NOTE: this function enables a challenger to raise and resolve a challenge.
-    // TODO: require challenger to pay a bond for raising a challenge
-    // TODO(samlaf): should we check that quorumNumbers is same as the one recorded in the task?
     function raiseAndResolveChallenge(
         Task calldata task,
         TaskResponse calldata taskResponse,
@@ -227,5 +222,14 @@ contract IncredibleSquaringTaskManager is
     function isValidOperator(address operatorAddress) external view onlyOperator returns(bool) {
         IRegistryCoordinator.OperatorInfo memory operatorInfo = registryCoordinator.getOperator(operatorAddress);
         return operatorInfo.operatorId != bytes32(0);
+    }
+
+    function setQuorumThreshold( uint threshold) external onlyOwner {
+        require(threshold <= 100, "threshold can't be larger than 100");
+        DEFAULT_QUORUM_THRESHOLD = threshold;
+    }
+
+    function setRequiredNumberOfSources( uint requiredNumOfSources) external onlyOwner {
+        DEFAULT_REQUIRED_NUM_OF_SOURCES = requiredNumOfSources;
     }
 }
