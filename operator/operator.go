@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -88,7 +89,7 @@ type Operator struct {
 	// needed to fetch the price of assets on different on-chain oracle networks
 	priceFeedAdapter *priceFeedAdapter.ContractPriceFeedAdapter
 
-	priceFSM *PriceFSM
+	priceFSM *PriceFSM[PriceUpdateRequest, PriceUpdateTaskResponse, SignedTaskResponse[PriceUpdateTaskResponse]]
 }
 
 type PriceUpdateRequest struct {
@@ -257,18 +258,7 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 		return nil, err
 	}
 
-	// setup raft consensus client
-	consensusFSM := NewConcensusFSM(priceFeedClient, blsKeyPair, operatorEcdsaPrivateKey)
-
 	taskResponses := make(map[uint32]map[sdktypes.TaskResponseDigest]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse)
-
-	// start http server with additional raft endpoints
-	h := NewService(c.HttpBindingURI, consensusFSM, blsAggregationService, &taskResponses, ethRpcClient)
-	h.avsReader = avsReader
-	h.logger = logger
-	if err := h.Start(); err != nil {
-		logger.Error("failed to start HTTP service: %s", err.Error())
-	}
 
 	operator := &Operator{
 		config:                             c,
@@ -290,7 +280,7 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 		credibleSquaringServiceManagerAddr: common.HexToAddress(c.AVSRegistryCoordinatorAddress),
 		operatorId:                         [32]byte{0}, // this is set below
 		priceFeedAdapter:                   priceFeedClient,
-		priceFSM:                           consensusFSM,
+		priceFSM:                           nil,
 		tasks:                              make(map[uint32]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTask),
 		taskResponses:                      taskResponses,
 		taskDigestQuorum:                   make(map[uint32]TaskDigestQuorum),
@@ -299,16 +289,35 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 	if c.RegisterOperatorOnStartup {
 		operator.registerOperatorOnStartup(operatorEcdsaPrivateKey, common.HexToAddress(c.TokenStrategyAddr))
 		avsWriter.ResigterOperatorUrl(context.Background(), c.HttpBindingURI, c.RaftBindingURI)
-		time.Sleep(5 * time.Second) // Ensure operator is registered
+		time.Sleep(1 * time.Second) // Ensure operator is registered
 	}
 
-	// Setup raft
+	// OperatorId is set in contract during registration so we get it after registering operator.
+	operatorId, err := sdkClients.AvsRegistryChainReader.GetOperatorId(&bind.CallOpts{}, operator.operatorAddr)
+	if err != nil {
+		logger.Error("Cannot get operator id", "err", err)
+		return nil, err
+	}
+	operator.operatorId = operatorId
+
+	// setup raft consensus client
+	consensusFSM := NewConcensusFSM[PriceUpdateRequest, PriceUpdateTaskResponse, SignedTaskResponse[PriceUpdateTaskResponse]](blsKeyPair, operatorEcdsaPrivateKey, blsAggregationService, ethRpcClient, logger)
+	operator.priceFSM = consensusFSM
+
+	// start http server with additional raft endpoints
+	consensusFSM.InitializeHttpServer(c.HttpBindingURI, operator.operatorLeaderSubmitBlsResponse, operator.isValidOperator, operator.fetchOperatorUrl)
+
+	// Setup raft cluster config
 	consensusFSM.RaftBind = c.RaftBindingURI
 	consensusFSM.RaftDir = c.RaftDirectoryPath
 	consensusFSM.RaftHttpBind = c.HttpBindingURI
+	consensusFSM.onTaskRequestFn = operator.operatorOnTaskRequested
+	consensusFSM.onTaskResponseFn = operator.operatorOnTaskResponse
+	consensusFSM.setOperatorId(operatorId)
 
 	// Check for past operators via OperatorRegistered event on ServiceManager
 	results, err := avsReader.GetRegistedOperatorUrls(context.Background())
+
 	results.Next() // First log is always empty so skip it https://stackoverflow.com/questions/62831835/go-ethereum-ethclient-cannot-get-event-logs-data
 
 	if err != nil {
@@ -316,10 +325,10 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 	}
 
 	// If operator is joining an existing raft network make request to join
-	// iterate over up to 10 urls
 	hasJoinedCluster := false
 	hasError := false
 
+	// Attempt to join existing operator raft cluster if it exist
 	for i := 0; i < 10; i++ {
 		event := results.Event
 
@@ -340,11 +349,11 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 
 			logger.Info("Attempting to join existing raft cluster", "joinUrl", url)
 
-			// initialize raft consensus server
+			// initialize raft consensus  rpc server
 			consensusFSM.Initialize(false, c.OperatorAddress)
 
 			if err := consensusFSM.JoinExistingNetwork(url, c.RaftBindingURI, c.OperatorAddress, blockNumber); err != nil {
-				logger.Warn("failed to join node at", "url", url, "err", err)
+				logger.Warn("failed to join node at", "url", url, "operatorId", event.OperatorId.String(), "err", err)
 				hasError = true
 				results.Next()
 			}
@@ -363,14 +372,6 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 		return nil, err
 	}
 
-	// OperatorId is set in contract during registration so we get it after registering operator.
-	operatorId, err := sdkClients.AvsRegistryChainReader.GetOperatorId(&bind.CallOpts{}, operator.operatorAddr)
-	if err != nil {
-		logger.Error("Cannot get operator id", "err", err)
-		return nil, err
-	}
-	operator.operatorId = operatorId
-	operator.priceFSM.setOperatorId(operatorId)
 	logger.Info("Operator info",
 		"operatorId", operatorId,
 		"operatorAddr", c.OperatorAddress,
@@ -485,10 +486,7 @@ func (o *Operator) ProcessNewPriceUpdateCreatedLog(newPriceUpdateTaskCreatedLog 
 		o.logger.Error("Failed to request task", "err", err)
 	}
 
-	// Leader sends request to follower operators
-	o.priceFSM.raft.Apply(dataBytes, raftTimeout)
-
-	o.logger.Info("Task request sent to followers")
+	o.priceFSM.LeaderSendTaskRequestToFollowers(dataBytes)
 	return err
 }
 
@@ -632,4 +630,140 @@ func contains(s []string, str string) bool {
 	}
 
 	return false
+}
+
+/////////// Methods used by raft consensus module ////////////////
+
+func (o *Operator) operatorOnTaskRequested(taskRequest PriceUpdateRequest) ([]PriceUpdateTaskResponse, error) {
+
+	var chainlinkResponse PriceUpdateTaskResponse = PriceUpdateTaskResponse{}
+	var diaResponse PriceUpdateTaskResponse = PriceUpdateTaskResponse{}
+
+	response := []PriceUpdateTaskResponse{} // slice will automatically resize if needed
+
+	// Fetch chainlink price
+	resolvePrice, err := o.priceFeedAdapter.GetLatestPrice(&bind.CallOpts{}, taskRequest.FeedName)
+
+	if err != nil {
+		o.logger.Warn("Failed to fetch price on chainlink", "err", err)
+		err = nil
+	} else {
+		chainlinkResponse = PriceUpdateTaskResponse{Price: uint32(resolvePrice.Uint64()), Source: "chainlink", TaskId: taskRequest.TaskId, Decimals: 18}
+	}
+
+	//fetch dia price
+	diaPrice, err := o.priceFeedAdapter.GetPriceDia(&bind.CallOpts{}, taskRequest.FeedName)
+
+	if err != nil {
+		o.logger.Warn("Failed to fetch price dia", "err", err)
+		err = nil
+	} else {
+		diaResponse = PriceUpdateTaskResponse{Price: uint32(diaPrice.Uint64()), Source: "dia", TaskId: taskRequest.TaskId, Decimals: 8}
+	}
+
+	empty := PriceUpdateTaskResponse{}
+
+	if chainlinkResponse != empty {
+		o.logger.Info("Chainlink response for feed received")
+		response = append(response, chainlinkResponse)
+	}
+
+	if diaResponse != empty {
+		o.logger.Info("Dia response for feed received")
+		response = append(response, diaResponse)
+	}
+
+	return response, nil
+}
+
+func (o *Operator) operatorOnTaskResponse(taskRequest PriceUpdateRequest, taskResponses []PriceUpdateTaskResponse) (SignedTaskResponse[PriceUpdateTaskResponse], string, error) {
+	responseSignatures := []bls.Signature{}
+	signedResponses := []PriceUpdateTaskResponse{}
+
+	// Iterate over every response and sign via bls signature
+	for _, response := range taskResponses {
+		if response.Source == "" {
+			continue
+		}
+
+		o.logger.Info("Submiting response for task", "taskId", response.TaskId, "source", response.Source)
+		taskResponseHash, err := core.GetTaskResponseDigest(response.Price, response.Source, response.TaskId, response.Decimals)
+		if err != nil {
+			o.logger.Info("Error getting task response header hash. skipping task (this is not expected and should be investigated)", "err", err)
+
+			var empty SignedTaskResponse[PriceUpdateTaskResponse]
+			return empty, "", err
+		}
+		responseSignatures = append(responseSignatures, *o.blsKeypair.SignMessage(taskResponseHash))
+		signedResponses = append(signedResponses, response)
+	}
+
+	signedTaskResponse := SignedTaskResponse[PriceUpdateTaskResponse]{
+		TaskResponse: signedResponses,
+		BlsSignature: responseSignatures,
+		OperatorId:   o.operatorId,
+	}
+	return signedTaskResponse, taskRequest.LeaderUrl, nil
+}
+
+func (o *Operator) operatorLeaderSubmitBlsResponse(task PriceUpdateTaskResponse, w http.ResponseWriter) (taskIndex uint32, taskResponseDigest [32]byte) {
+	// Submit each price feed source seperatly
+	o.logger.Info("Preparing to submit bls signatures")
+
+	currentTaskIndex := task.TaskId
+	taskResponseDigest, err := core.GetTaskResponseDigest(task.Price, task.Source, task.TaskId, task.Decimals)
+	if err != nil {
+		o.logger.Error("Failed to get task response digest", "err", err)
+		w.WriteHeader(http.StatusBadGateway)
+	}
+	o.taskResponsesMu.Lock()
+
+	if _, ok := (o.taskResponses)[currentTaskIndex]; !ok {
+		(o.taskResponses)[currentTaskIndex] = make(map[sdktypes.TaskResponseDigest]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse)
+	}
+	if _, ok := (o.taskResponses)[currentTaskIndex][taskResponseDigest]; !ok {
+		(o.taskResponses)[currentTaskIndex][taskResponseDigest] = cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse{
+			Price:    uint32(task.Price),
+			Decimals: 18,
+			Source:   task.Source,
+			TaskId:   task.TaskId,
+		}
+	}
+	o.taskResponsesMu.Unlock()
+	return currentTaskIndex, taskResponseDigest
+}
+
+func (o *Operator) isValidOperator(operatorAddress common.Address) (bool, error) {
+	validOperatorUrls, err := o.avsReader.FetchOperatorUrl(context.Background(), operatorAddress) // generic callbacks (1. Validate operator address. 2. Fetch operator urls)
+
+	if err != nil {
+		o.logger.Warn("Resolved address is not a valid operator", "address", operatorAddress, "error", err)
+		return false, err
+	}
+
+	empty := struct {
+		HttpUrl string
+		RpcUrl  string
+	}{}
+
+	isValid := validOperatorUrls != empty
+
+	return isValid, nil
+}
+
+func (o *Operator) fetchOperatorUrl(operatorAddress common.Address) (struct {
+	HttpUrl string
+	RpcUrl  string
+}, error) {
+	validOperatorUrls, err := o.avsReader.FetchOperatorUrl(context.Background(), operatorAddress) // generic callbacks (1. Validate operator address. 2. Fetch operator urls)
+
+	if err != nil {
+		o.logger.Warn("Failed to fetch url for operator", "address", operatorAddress, "error", err)
+		return struct {
+			HttpUrl string
+			RpcUrl  string
+		}{}, err
+	}
+
+	return validOperatorUrls, nil
 }

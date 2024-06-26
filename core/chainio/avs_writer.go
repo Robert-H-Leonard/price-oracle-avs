@@ -111,7 +111,14 @@ func (w *AvsWriter) SendNewPriceUpdate(ctx context.Context, feedName string) (cs
 		w.logger.Errorf("Error getting tx opts")
 		return cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTask{}, 0, err
 	}
-	tx, err := w.AvsContractBindings.TaskManager.RequestPriceFeedUpdate(txOpts, feedName, uint32(sdktypes.QuorumThresholdPercentage(66)), sdktypes.QuorumNums{0}.UnderlyingType(), uint8(1))
+
+	// Read task quorum threshold on chain
+	//threshold, _ := w.AvsContractBindings.TaskManager.DEFAULTQUORUMTHRESHOLD(&bind.CallOpts{})
+
+	// Read min number of sources for task
+	//minNumOfSources, _ := w.AvsContractBindings.TaskManager.DEFAULTREQUIREDNUMOFSOURCES(&bind.CallOpts{})
+
+	tx, err := w.AvsContractBindings.TaskManager.RequestPriceFeedUpdate(txOpts, feedName, uint32(sdktypes.QuorumThresholdPercentage(33)), sdktypes.QuorumNums{0}.UnderlyingType(), uint8(1))
 	if err != nil {
 		w.logger.Errorf("Error assembling CreateNewTask tx")
 		return cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTask{}, 0, err
