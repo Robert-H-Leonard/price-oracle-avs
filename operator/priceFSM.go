@@ -39,8 +39,8 @@ type SignedTaskResponse[K any] struct {
 	OperatorId   sdktypes.OperatorId
 }
 
-type onTaskRequest[T any, K any] func(taskRequest T) (K, error)                                                                    // Method which is executed when the current leader request a task to be executed to all followers on the network
-type onSubmitTaskToLeader[T any, K any, S any] func(taskRequest T, taskResponse K) (signedResponse S, leaderUrl string, err error) // Method which is executed when a follower operator wants to submit a task to the current leader
+type onTaskRequest[T any, K any] func(taskRequest T) ([]K, error)                                                                    // Method which is executed when the current leader request a task to be executed to all followers on the network
+type onSubmitTaskToLeader[T any, K any, S any] func(taskRequest T, taskResponse []K) (signedResponse S, leaderUrl string, err error) // Method which is executed when a follower operator wants to submit a task to the current leader
 
 // Type T is the task request that is sent from the leader to followers
 // Type K is the task response submitted from followers to the leader
@@ -75,6 +75,67 @@ func NewConcensusFSM[T any, K any, S any](keyPair *bls.KeyPair, pk *ecdsa.Privat
 	}
 }
 
+// Operator initializes raft consenses server if enableSingle is set, and there are no existing peers,
+// then this node becomes the first node, and therefore leader, of the cluster.
+// localID should be the server identifier for this node.
+func (p *PriceFSM[T, K, S]) Initialize(enableSingle bool, localId string) error {
+	// Setup Raft configuration.
+	config := raft.DefaultConfig()
+	config.LocalID = raft.ServerID(localId)
+
+	// Setup Raft communication.
+	addr, err := net.ResolveTCPAddr("tcp", p.RaftBind)
+	if err != nil {
+		return err
+	}
+	transport, err := raft.NewTCPTransport(p.RaftBind, addr, 3, 10*time.Second, os.Stderr)
+	if err != nil {
+		return err
+	}
+
+	// Create the snapshot store. This allows the Raft to truncate the log.
+	snapshots, err := raft.NewFileSnapshotStore(p.RaftDir, retainSnapshotCount, os.Stderr)
+	if err != nil {
+		return fmt.Errorf("file snapshot store: %s", err)
+	}
+
+	// Create the log store and stable store using BoltDB in memory key value store
+	var logStore raft.LogStore
+	var stableStore raft.StableStore
+
+	boltDB, err := raftboltdb.New(raftboltdb.Options{
+		Path: filepath.Join(p.RaftDir, "raft.db"),
+	})
+	if err != nil {
+		return fmt.Errorf("new bbolt store: %s", err)
+	}
+
+	logStore = boltDB
+	stableStore = boltDB
+
+	// Instantiate the Raft systems.
+	p.logger.Info("Launching raft rpc server")
+	ra, err := raft.NewRaft(config, (raft.FSM)(p), logStore, stableStore, snapshots, transport)
+	if err != nil {
+		return fmt.Errorf("new raft: %s", err)
+	}
+	p.raft = ra
+
+	// If only node and not joining an existing raft network bootstrap the network
+	if enableSingle {
+		configuration := raft.Configuration{
+			Servers: []raft.Server{
+				{
+					ID:      config.LocalID,
+					Address: transport.LocalAddr(),
+				},
+			},
+		}
+		ra.BootstrapCluster(configuration)
+	}
+	return nil
+}
+
 func (p *PriceFSM[T, K, S]) InitializeHttpServer(addr string, onLeaderProcessBlsSignedResponse onLeaderProcessBlsSignedResponse[K], isValidOperator isValidOperator, fetchOperatorUrl fetchOperatorUrl) error {
 	h := &Service[K]{
 		addr:                             addr,
@@ -87,11 +148,13 @@ func (p *PriceFSM[T, K, S]) InitializeHttpServer(addr string, onLeaderProcessBls
 		logger:                           p.logger,
 	}
 
+	p.logger.Info("Launching raft http server")
 	if err := h.Start(); err != nil {
 		p.logger.Error("failed to start HTTP service: %s", err.Error())
 		return err
 	}
 
+	p.logger.Info("Successfully launched raft http server")
 	p.httpRaftServer = h
 
 	return nil
@@ -142,66 +205,6 @@ func (p *PriceFSM[T, K, S]) setOnTaskResponseFn(fn onSubmitTaskToLeader[T, K, S]
 	p.onTaskResponseFn = fn
 }
 
-// Operator initializes raft consenses server if enableSingle is set, and there are no existing peers,
-// then this node becomes the first node, and therefore leader, of the cluster.
-// localID should be the server identifier for this node.
-func (p *PriceFSM[T, K, S]) Initialize(enableSingle bool, localId string) error {
-	// Setup Raft configuration.
-	config := raft.DefaultConfig()
-	config.LocalID = raft.ServerID(localId)
-
-	// Setup Raft communication.
-	addr, err := net.ResolveTCPAddr("tcp", p.RaftBind)
-	if err != nil {
-		return err
-	}
-	transport, err := raft.NewTCPTransport(p.RaftBind, addr, 3, 10*time.Second, os.Stderr)
-	if err != nil {
-		return err
-	}
-
-	// Create the snapshot store. This allows the Raft to truncate the log.
-	snapshots, err := raft.NewFileSnapshotStore(p.RaftDir, retainSnapshotCount, os.Stderr)
-	if err != nil {
-		return fmt.Errorf("file snapshot store: %s", err)
-	}
-
-	// Create the log store and stable store using BoltDB in memory key value store
-	var logStore raft.LogStore
-	var stableStore raft.StableStore
-
-	boltDB, err := raftboltdb.New(raftboltdb.Options{
-		Path: filepath.Join(p.RaftDir, "raft.db"),
-	})
-	if err != nil {
-		return fmt.Errorf("new bbolt store: %s", err)
-	}
-
-	logStore = boltDB
-	stableStore = boltDB
-
-	// Instantiate the Raft systems.
-	ra, err := raft.NewRaft(config, (raft.FSM)(p), logStore, stableStore, snapshots, transport)
-	if err != nil {
-		return fmt.Errorf("new raft: %s", err)
-	}
-	p.raft = ra
-
-	// If only node and not joining an existing raft network bootstrap the network
-	if enableSingle {
-		configuration := raft.Configuration{
-			Servers: []raft.Server{
-				{
-					ID:      config.LocalID,
-					Address: transport.LocalAddr(),
-				},
-			},
-		}
-		ra.BootstrapCluster(configuration)
-	}
-	return nil
-}
-
 // Join joins a node, identified by nodeID and located at addr, to this store.
 // The node must be ready to respond to Raft communications at that address.
 func (p *PriceFSM[T, K, S]) Join(nodeID, addr string) error {
@@ -248,7 +251,7 @@ func (p *PriceFSM[T, K, S]) TriggerElection() {
 	p.raft.LeadershipTransfer()
 }
 
-func (p *PriceFSM[T, K, S]) SubmitTaskToLeader(request T, responses K) error {
+func (p *PriceFSM[T, K, S]) SubmitTaskToLeader(request T, responses []K) error {
 	signedTaskResponse, leaderUrl, err := p.onTaskResponseFn(request, responses)
 
 	b, err := json.Marshal(signedTaskResponse)
@@ -298,14 +301,14 @@ func (f *PriceFSM[T, K, S]) Apply(l *raft.Log) interface{} {
 		panic(fmt.Sprintf("failed to unmarshal command: %s", err.Error()))
 	}
 
-	taskResponse, err := f.onTaskRequestFn(request)
+	taskResponses, err := f.onTaskRequestFn(request)
 
 	if err != nil {
 		log.Printf("Error submitting task: %v", err)
 		return nil
 	}
 
-	if err := f.SubmitTaskToLeader(request, taskResponse); err != nil {
+	if err := f.SubmitTaskToLeader(request, taskResponses); err != nil {
 		f.logger.Info("Failed to submit task response", "err", err)
 	}
 

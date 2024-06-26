@@ -89,7 +89,7 @@ type Operator struct {
 	// needed to fetch the price of assets on different on-chain oracle networks
 	priceFeedAdapter *priceFeedAdapter.ContractPriceFeedAdapter
 
-	priceFSM *PriceFSM[PriceUpdateRequest, []PriceUpdateTaskResponse, SignedTaskResponse[PriceUpdateTaskResponse]]
+	priceFSM *PriceFSM[PriceUpdateRequest, PriceUpdateTaskResponse, SignedTaskResponse[PriceUpdateTaskResponse]]
 }
 
 type PriceUpdateRequest struct {
@@ -258,9 +258,6 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 		return nil, err
 	}
 
-	// setup raft consensus client
-	consensusFSM := NewConcensusFSM[PriceUpdateRequest, []PriceUpdateTaskResponse, SignedTaskResponse[PriceUpdateTaskResponse]](blsKeyPair, operatorEcdsaPrivateKey, blsAggregationService, ethRpcClient, logger)
-
 	taskResponses := make(map[uint32]map[sdktypes.TaskResponseDigest]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse)
 
 	operator := &Operator{
@@ -283,7 +280,7 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 		credibleSquaringServiceManagerAddr: common.HexToAddress(c.AVSRegistryCoordinatorAddress),
 		operatorId:                         [32]byte{0}, // this is set below
 		priceFeedAdapter:                   priceFeedClient,
-		priceFSM:                           consensusFSM,
+		priceFSM:                           nil,
 		tasks:                              make(map[uint32]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTask),
 		taskResponses:                      taskResponses,
 		taskDigestQuorum:                   make(map[uint32]TaskDigestQuorum),
@@ -292,8 +289,20 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 	if c.RegisterOperatorOnStartup {
 		operator.registerOperatorOnStartup(operatorEcdsaPrivateKey, common.HexToAddress(c.TokenStrategyAddr))
 		avsWriter.ResigterOperatorUrl(context.Background(), c.HttpBindingURI, c.RaftBindingURI)
-		time.Sleep(5 * time.Second) // Ensure operator is registered
+		time.Sleep(1 * time.Second) // Ensure operator is registered
 	}
+
+	// OperatorId is set in contract during registration so we get it after registering operator.
+	operatorId, err := sdkClients.AvsRegistryChainReader.GetOperatorId(&bind.CallOpts{}, operator.operatorAddr)
+	if err != nil {
+		logger.Error("Cannot get operator id", "err", err)
+		return nil, err
+	}
+	operator.operatorId = operatorId
+
+	// setup raft consensus client
+	consensusFSM := NewConcensusFSM[PriceUpdateRequest, PriceUpdateTaskResponse, SignedTaskResponse[PriceUpdateTaskResponse]](blsKeyPair, operatorEcdsaPrivateKey, blsAggregationService, ethRpcClient, logger)
+	operator.priceFSM = consensusFSM
 
 	// start http server with additional raft endpoints
 	consensusFSM.InitializeHttpServer(c.HttpBindingURI, operator.operatorLeaderSubmitBlsResponse, operator.isValidOperator, operator.fetchOperatorUrl)
@@ -304,6 +313,7 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 	consensusFSM.RaftHttpBind = c.HttpBindingURI
 	consensusFSM.onTaskRequestFn = operator.operatorOnTaskRequested
 	consensusFSM.onTaskResponseFn = operator.operatorOnTaskResponse
+	consensusFSM.setOperatorId(operatorId)
 
 	// Check for past operators via OperatorRegistered event on ServiceManager
 	results, err := avsReader.GetRegistedOperatorUrls(context.Background())
@@ -362,14 +372,6 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 		return nil, err
 	}
 
-	// OperatorId is set in contract during registration so we get it after registering operator.
-	operatorId, err := sdkClients.AvsRegistryChainReader.GetOperatorId(&bind.CallOpts{}, operator.operatorAddr)
-	if err != nil {
-		logger.Error("Cannot get operator id", "err", err)
-		return nil, err
-	}
-	operator.operatorId = operatorId
-	operator.priceFSM.setOperatorId(operatorId)
 	logger.Info("Operator info",
 		"operatorId", operatorId,
 		"operatorAddr", c.OperatorAddress,
@@ -405,7 +407,7 @@ func (o *Operator) Start(ctx context.Context) error {
 		metricsErrChan = make(chan error, 1)
 	}
 
-	ticker := time.NewTicker(20 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	// TODO(samlaf): wrap this call with increase in avs-node-spec metric
@@ -630,6 +632,8 @@ func contains(s []string, str string) bool {
 	return false
 }
 
+/////////// Methods used by raft consensus module ////////////////
+
 func (o *Operator) operatorOnTaskRequested(taskRequest PriceUpdateRequest) ([]PriceUpdateTaskResponse, error) {
 
 	var chainlinkResponse PriceUpdateTaskResponse = PriceUpdateTaskResponse{}
@@ -702,11 +706,9 @@ func (o *Operator) operatorOnTaskResponse(taskRequest PriceUpdateRequest, taskRe
 	return signedTaskResponse, taskRequest.LeaderUrl, nil
 }
 
-func (o *Operator) operatorLeaderSubmitBlsResponse(tasks []PriceUpdateTaskResponse, w http.ResponseWriter) (taskIndex uint32, taskResponseDigest [32]byte) {
+func (o *Operator) operatorLeaderSubmitBlsResponse(task PriceUpdateTaskResponse, w http.ResponseWriter) (taskIndex uint32, taskResponseDigest [32]byte) {
 	// Submit each price feed source seperatly
 	o.logger.Info("Preparing to submit bls signatures")
-
-	task := tasks[0] // We only submit 1 bls response at a time
 
 	currentTaskIndex := task.TaskId
 	taskResponseDigest, err := core.GetTaskResponseDigest(task.Price, task.Source, task.TaskId, task.Decimals)
