@@ -633,142 +633,6 @@ func (o *Operator) AttemptToJoinCluster() (hasJoinedCluster bool, err error) {
 	return hasJoinedCluster, err
 }
 
-func (o *Operator) operatorOnTaskRequested(taskRequest PriceUpdateRequest) ([]PriceUpdateTaskResponse, error) {
-
-	var chainlinkResponse PriceUpdateTaskResponse = PriceUpdateTaskResponse{}
-	var diaResponse PriceUpdateTaskResponse = PriceUpdateTaskResponse{}
-
-	response := []PriceUpdateTaskResponse{} // slice will automatically resize if needed
-
-	// Fetch chainlink price
-	resolvePrice, err := o.priceFeedAdapter.GetLatestPrice(&bind.CallOpts{}, taskRequest.FeedName)
-
-	if err != nil {
-		o.logger.Warn("Failed to fetch price on chainlink", "err", err)
-		err = nil
-	} else {
-		chainlinkResponse = PriceUpdateTaskResponse{Price: uint32(resolvePrice.Uint64()), Source: "chainlink", TaskId: taskRequest.TaskId, Decimals: 18}
-		o.logger.Info("Chainlink price resolved", "price", resolvePrice.Uint64(), "decimals", 18, "taskId", taskRequest.TaskId, "feedName", taskRequest.FeedName)
-	}
-
-	//fetch dia price
-	diaPrice, err := o.priceFeedAdapter.GetPriceDia(&bind.CallOpts{}, taskRequest.FeedName)
-
-	if err != nil {
-		o.logger.Warn("Failed to fetch price dia", "err", err)
-		err = nil
-	} else {
-		diaResponse = PriceUpdateTaskResponse{Price: uint32(diaPrice.Uint64()), Source: "dia", TaskId: taskRequest.TaskId, Decimals: 8}
-		o.logger.Info("Dia price resolved", "price", diaPrice.Uint64(), "decimals", 8, "taskId", taskRequest.TaskId, "feedName", taskRequest.FeedName)
-	}
-
-	empty := PriceUpdateTaskResponse{}
-
-	if chainlinkResponse != empty {
-		o.logger.Info("Chainlink response for feed received")
-		response = append(response, chainlinkResponse)
-	}
-
-	if diaResponse != empty {
-		o.logger.Info("Dia response for feed received")
-		response = append(response, diaResponse)
-	}
-
-	return response, nil
-}
-
-func (o *Operator) operatorOnTaskResponse(taskRequest PriceUpdateRequest, taskResponses []PriceUpdateTaskResponse) (SignedTaskResponse[PriceUpdateTaskResponse], string, error) {
-	responseSignatures := []bls.Signature{}
-	signedResponses := []PriceUpdateTaskResponse{}
-
-	// Iterate over every response and sign via bls signature
-	for _, response := range taskResponses {
-		if response.Source == "" {
-			continue
-		}
-
-		o.logger.Info("Submiting response for task", "taskId", response.TaskId, "source", response.Source)
-		taskResponseHash, err := core.GetTaskResponseDigest(response.Price, response.Source, response.TaskId, response.Decimals)
-		if err != nil {
-			o.logger.Info("Error getting task response header hash. skipping task (this is not expected and should be investigated)", "err", err)
-
-			var empty SignedTaskResponse[PriceUpdateTaskResponse]
-			return empty, "", err
-		}
-		responseSignatures = append(responseSignatures, *o.blsKeypair.SignMessage(taskResponseHash))
-		signedResponses = append(signedResponses, response)
-	}
-
-	signedTaskResponse := SignedTaskResponse[PriceUpdateTaskResponse]{
-		TaskResponse: signedResponses,
-		BlsSignature: responseSignatures,
-		OperatorId:   o.operatorId,
-	}
-	return signedTaskResponse, taskRequest.LeaderUrl, nil
-}
-
-func (o *Operator) operatorLeaderSubmitBlsResponse(task PriceUpdateTaskResponse, w http.ResponseWriter) (taskIndex uint32, taskResponseDigest [32]byte) {
-	// Submit each price feed source seperatly
-	o.logger.Info("Preparing to submit bls signatures")
-
-	currentTaskIndex := task.TaskId
-	taskResponseDigest, err := core.GetTaskResponseDigest(task.Price, task.Source, task.TaskId, task.Decimals)
-	if err != nil {
-		o.logger.Error("Failed to get task response digest", "err", err)
-		w.WriteHeader(http.StatusBadGateway)
-	}
-	o.taskResponsesMu.Lock()
-
-	if _, ok := (o.taskResponses)[currentTaskIndex]; !ok {
-		(o.taskResponses)[currentTaskIndex] = make(map[sdktypes.TaskResponseDigest]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse)
-	}
-	if _, ok := (o.taskResponses)[currentTaskIndex][taskResponseDigest]; !ok {
-		(o.taskResponses)[currentTaskIndex][taskResponseDigest] = cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse{
-			Price:    uint32(task.Price),
-			Decimals: 18,
-			Source:   task.Source,
-			TaskId:   task.TaskId,
-		}
-	}
-	o.taskResponsesMu.Unlock()
-	return currentTaskIndex, taskResponseDigest
-}
-
-func (o *Operator) isValidOperator(operatorAddress common.Address) (bool, error) {
-	validOperatorUrls, err := o.avsReader.FetchOperatorUrl(context.Background(), operatorAddress) // generic callbacks (1. Validate operator address. 2. Fetch operator urls)
-
-	if err != nil {
-		o.logger.Warn("Resolved address is not a valid operator", "address", operatorAddress, "error", err)
-		return false, err
-	}
-
-	empty := struct {
-		HttpUrl string
-		RpcUrl  string
-	}{}
-
-	isValid := validOperatorUrls != empty
-
-	return isValid, nil
-}
-
-func (o *Operator) fetchOperatorUrl(operatorAddress common.Address) (struct {
-	HttpUrl string
-	RpcUrl  string
-}, error) {
-	validOperatorUrls, err := o.avsReader.FetchOperatorUrl(context.Background(), operatorAddress) // generic callbacks (1. Validate operator address. 2. Fetch operator urls)
-
-	if err != nil {
-		o.logger.Warn("Failed to fetch url for operator", "address", operatorAddress, "error", err)
-		return struct {
-			HttpUrl string
-			RpcUrl  string
-		}{}, err
-	}
-
-	return validOperatorUrls, nil
-}
-
 // //////////////////////////// Utils //////////////////////////////////////
 func contains(s []string, str string) bool {
 	for _, v := range s {
@@ -797,6 +661,7 @@ func (o *Operator) operatorOnTaskRequested(taskRequest PriceUpdateRequest) ([]Pr
 		err = nil
 	} else {
 		chainlinkResponse = PriceUpdateTaskResponse{Price: uint32(resolvePrice.Uint64()), Source: "chainlink", TaskId: taskRequest.TaskId, Decimals: 18}
+		o.logger.Info("Chainlink price resolved", "price", resolvePrice.Uint64(), "decimals", 18, "taskId", taskRequest.TaskId, "feedName", taskRequest.FeedName)
 	}
 
 	//fetch dia price
@@ -807,6 +672,7 @@ func (o *Operator) operatorOnTaskRequested(taskRequest PriceUpdateRequest) ([]Pr
 		err = nil
 	} else {
 		diaResponse = PriceUpdateTaskResponse{Price: uint32(diaPrice.Uint64()), Source: "dia", TaskId: taskRequest.TaskId, Decimals: 8}
+		o.logger.Info("Dia price resolved", "price", diaPrice.Uint64(), "decimals", 8, "taskId", taskRequest.TaskId, "feedName", taskRequest.FeedName)
 	}
 
 	empty := PriceUpdateTaskResponse{}
