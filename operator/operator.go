@@ -14,6 +14,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/prometheus/client_golang/prometheus"
 
+	eigenShift "github.com/Robert-H-Leonard/eigenShift"
+
 	cstaskmanager "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/IncredibleSquaringTaskManager"
 	priceFeedAdapter "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/PriceFeedAdapter"
 	"github.com/Layr-Labs/incredible-squaring-avs/core"
@@ -303,7 +305,7 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 	/////////////////////// Raft Cluster Consensus Integration ///////////////////////////////
 
 	// setup raft consensus client
-	consensusFSM := NewConcensusFSM[PriceUpdateRequest, PriceUpdateTaskResponse, SignedTaskResponse[PriceUpdateTaskResponse]](blsKeyPair, operatorEcdsaPrivateKey, blsAggregationService, ethRpcClient, logger)
+	consensusFSM := eigenShift.NewConcensusFSM[PriceUpdateRequest, PriceUpdateTaskResponse, SignedTaskResponse[PriceUpdateTaskResponse]](blsKeyPair, operatorEcdsaPrivateKey, blsAggregationService, ethRpcClient, logger)
 	operator.priceFSM = consensusFSM
 
 	// start http server with additional raft endpoints
