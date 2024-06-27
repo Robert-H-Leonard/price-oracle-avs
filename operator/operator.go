@@ -14,7 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/prometheus/client_golang/prometheus"
 
-	eigenShift "github.com/Robert-H-Leonard/eigenShift"
+	taskconsensus "github.com/Robert-H-Leonard/eigenShift/task-consensus"
 
 	cstaskmanager "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/IncredibleSquaringTaskManager"
 	priceFeedAdapter "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/PriceFeedAdapter"
@@ -91,7 +91,7 @@ type Operator struct {
 	// needed to fetch the price of assets on different on-chain oracle networks
 	priceFeedAdapter *priceFeedAdapter.ContractPriceFeedAdapter
 
-	priceFSM *PriceFSM[PriceUpdateRequest, PriceUpdateTaskResponse, SignedTaskResponse[PriceUpdateTaskResponse]]
+	priceFSM *taskconsensus.PriceFSM[PriceUpdateRequest, PriceUpdateTaskResponse, taskconsensus.SignedTaskResponse[PriceUpdateTaskResponse]]
 }
 
 type PriceUpdateRequest struct {
@@ -305,16 +305,15 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 	/////////////////////// Raft Cluster Consensus Integration ///////////////////////////////
 
 	// setup raft consensus client
-	consensusFSM := eigenShift.NewConcensusFSM[PriceUpdateRequest, PriceUpdateTaskResponse, SignedTaskResponse[PriceUpdateTaskResponse]](blsKeyPair, operatorEcdsaPrivateKey, blsAggregationService, ethRpcClient, logger)
+	consensusFSM := taskconsensus.NewConcensusFSM[PriceUpdateRequest, PriceUpdateTaskResponse, taskconsensus.SignedTaskResponse[PriceUpdateTaskResponse]](blsKeyPair, operatorEcdsaPrivateKey, blsAggregationService, ethRpcClient, logger)
 	operator.priceFSM = consensusFSM
 
 	// start http server with additional raft endpoints
 	consensusFSM.InitializeHttpServer(c.HttpBindingURI, operator.operatorLeaderSubmitBlsResponse, operator.isValidOperator, operator.fetchOperatorUrl)
 
 	// Setup raft cluster config
-	consensusFSM.ConfigureRaftBindings(c.RaftBindingURI, c.HttpBindingURI, c.RaftDirectoryPath)
+	consensusFSM.ConfigureRaftBindings(c.RaftBindingURI, c.HttpBindingURI, c.RaftDirectoryPath, operatorId)
 	consensusFSM.ConfigureTaskCallbacks(operator.operatorOnTaskRequested, operator.operatorOnTaskResponse)
-	consensusFSM.setOperatorId(operatorId)
 
 	hasJoinedCluster, err := operator.AttemptToJoinCluster()
 
@@ -692,7 +691,7 @@ func (o *Operator) operatorOnTaskRequested(taskRequest PriceUpdateRequest) ([]Pr
 	return response, nil
 }
 
-func (o *Operator) operatorOnTaskResponse(taskRequest PriceUpdateRequest, taskResponses []PriceUpdateTaskResponse) (SignedTaskResponse[PriceUpdateTaskResponse], string, error) {
+func (o *Operator) operatorOnTaskResponse(taskRequest PriceUpdateRequest, taskResponses []PriceUpdateTaskResponse) (taskconsensus.SignedTaskResponse[PriceUpdateTaskResponse], string, error) {
 	responseSignatures := []bls.Signature{}
 	signedResponses := []PriceUpdateTaskResponse{}
 
@@ -707,14 +706,14 @@ func (o *Operator) operatorOnTaskResponse(taskRequest PriceUpdateRequest, taskRe
 		if err != nil {
 			o.logger.Info("Error getting task response header hash. skipping task (this is not expected and should be investigated)", "err", err)
 
-			var empty SignedTaskResponse[PriceUpdateTaskResponse]
+			var empty taskconsensus.SignedTaskResponse[PriceUpdateTaskResponse]
 			return empty, "", err
 		}
 		responseSignatures = append(responseSignatures, *o.blsKeypair.SignMessage(taskResponseHash))
 		signedResponses = append(signedResponses, response)
 	}
 
-	signedTaskResponse := SignedTaskResponse[PriceUpdateTaskResponse]{
+	signedTaskResponse := taskconsensus.SignedTaskResponse[PriceUpdateTaskResponse]{
 		TaskResponse: signedResponses,
 		BlsSignature: responseSignatures,
 		OperatorId:   o.operatorId,
