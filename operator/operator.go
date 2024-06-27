@@ -648,6 +648,7 @@ func (o *Operator) operatorOnTaskRequested(taskRequest PriceUpdateRequest) ([]Pr
 		err = nil
 	} else {
 		chainlinkResponse = PriceUpdateTaskResponse{Price: uint32(resolvePrice.Uint64()), Source: "chainlink", TaskId: taskRequest.TaskId, Decimals: 18}
+		o.logger.Info("Chainlink price resolved", "price", resolvePrice.Uint64(), "decimals", 18, "taskId", taskRequest.TaskId, "feedName", taskRequest.FeedName)
 	}
 
 	//fetch dia price
@@ -658,6 +659,7 @@ func (o *Operator) operatorOnTaskRequested(taskRequest PriceUpdateRequest) ([]Pr
 		err = nil
 	} else {
 		diaResponse = PriceUpdateTaskResponse{Price: uint32(diaPrice.Uint64()), Source: "dia", TaskId: taskRequest.TaskId, Decimals: 8}
+		o.logger.Info("Dia price resolved", "price", diaPrice.Uint64(), "decimals", 8, "taskId", taskRequest.TaskId, "feedName", taskRequest.FeedName)
 	}
 
 	empty := PriceUpdateTaskResponse{}
