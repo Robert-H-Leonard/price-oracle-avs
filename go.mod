@@ -6,6 +6,7 @@ toolchain go1.21.0
 
 require (
 	github.com/Layr-Labs/eigensdk-go v0.1.7-0.20240425202952-954cd7661775
+	github.com/Robert-H-Leonard/eigenShift v0.0.7
 	github.com/ethereum/go-ethereum v1.13.14
 	github.com/hashicorp/raft v1.6.1
 	github.com/hashicorp/raft-boltdb v0.0.0-20231211162105-6c830fa4535e
@@ -23,7 +24,6 @@ require (
 	github.com/DataDog/zstd v1.5.2 // indirect
 	github.com/Microsoft/go-winio v0.6.1 // indirect
 	github.com/Microsoft/hcsshim v0.11.4 // indirect
-	github.com/Robert-H-Leonard/eigenShift v0.0.5 // indirect
 	github.com/StackExchange/wmi v1.2.1 // indirect
 	github.com/VictoriaMetrics/fastcache v1.12.1 // indirect
 	github.com/armon/go-metrics v0.4.1 // indirect

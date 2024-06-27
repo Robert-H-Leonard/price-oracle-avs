@@ -25,6 +25,10 @@ github.com/Microsoft/hcsshim v0.11.4 h1:68vKo2VN8DE9AdN4tnkWnmdhqdbpUFM8OF3Airm7
 github.com/Microsoft/hcsshim v0.11.4/go.mod h1:smjE4dvqPX9Zldna+t5FG3rnoHhaB7QYxPRqGcpAD9w=
 github.com/Robert-H-Leonard/eigenShift v0.0.5 h1:V78rgyuofTlI9NQz1xSfxG3AyajJ8YbgFYjl4snRXVE=
 github.com/Robert-H-Leonard/eigenShift v0.0.5/go.mod h1:+cSeFOpvR12jy3T6BwIs6bBFxagRMVgVBWFUmNOjwEs=
+github.com/Robert-H-Leonard/eigenShift v0.0.6 h1:yAitQE3qZ+uKOuA1km2hEhLYidfu4t6TNdcTywit9as=
+github.com/Robert-H-Leonard/eigenShift v0.0.6/go.mod h1:PO3stjE/4JGKJxXSK2V82nD/mMcTDck3oXnazpbNvcU=
+github.com/Robert-H-Leonard/eigenShift v0.0.7 h1:lGvTV+birlvWJKSW0bxWtU34E1du3Ie829LbEFmuMyQ=
+github.com/Robert-H-Leonard/eigenShift v0.0.7/go.mod h1:PO3stjE/4JGKJxXSK2V82nD/mMcTDck3oXnazpbNvcU=
 github.com/Shopify/goreferrer v0.0.0-20181106222321-ec9c9a553398/go.mod h1:a1uqRtAwp2Xwc6WNPJEufxJ7fx3npB4UV/JOLmbu5I0=
 github.com/StackExchange/wmi v1.2.1 h1:VIkavFPXSjcnS+O8yTq7NI32k0R5Aj+v39y29VYDOSA=
 github.com/StackExchange/wmi v1.2.1/go.mod h1:rcmrprowKIVzvc+NUiLncP2uuArMWLCbu9SBzvHz7e8=
