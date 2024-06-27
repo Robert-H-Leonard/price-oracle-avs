@@ -28,7 +28,8 @@ contract IncredibleSquaringTaskManager is
     uint256 internal constant _THRESHOLD_DENOMINATOR = 100;
 
     // Task parameters used by operators
-    uint public DEFAULT_QUORUM_THRESHOLD = 33;
+    uint public DEFAULT_QUORUM_THRESHOLD = 67; // 67%
+
     uint public DEFAULT_REQUIRED_NUM_OF_SOURCES = 2;
 
     /* STORAGE */

@@ -118,7 +118,7 @@ func (w *AvsWriter) SendNewPriceUpdate(ctx context.Context, feedName string) (cs
 	// Read min number of sources for task
 	//minNumOfSources, _ := w.AvsContractBindings.TaskManager.DEFAULTREQUIREDNUMOFSOURCES(&bind.CallOpts{})
 
-	tx, err := w.AvsContractBindings.TaskManager.RequestPriceFeedUpdate(txOpts, feedName, uint32(sdktypes.QuorumThresholdPercentage(33)), sdktypes.QuorumNums{0}.UnderlyingType(), uint8(1))
+	tx, err := w.AvsContractBindings.TaskManager.RequestPriceFeedUpdate(txOpts, feedName, uint32(sdktypes.QuorumThresholdPercentage(67)), sdktypes.QuorumNums{0}.UnderlyingType(), uint8(1))
 	if err != nil {
 		w.logger.Errorf("Error assembling CreateNewTask tx")
 		return cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTask{}, 0, err

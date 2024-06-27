@@ -300,6 +300,8 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 	}
 	operator.operatorId = operatorId
 
+	/////////////////////// Raft Cluster Consensus Integration ///////////////////////////////
+
 	// setup raft consensus client
 	consensusFSM := NewConcensusFSM[PriceUpdateRequest, PriceUpdateTaskResponse, SignedTaskResponse[PriceUpdateTaskResponse]](blsKeyPair, operatorEcdsaPrivateKey, blsAggregationService, ethRpcClient, logger)
 	operator.priceFSM = consensusFSM
@@ -308,69 +310,22 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 	consensusFSM.InitializeHttpServer(c.HttpBindingURI, operator.operatorLeaderSubmitBlsResponse, operator.isValidOperator, operator.fetchOperatorUrl)
 
 	// Setup raft cluster config
-	consensusFSM.RaftBind = c.RaftBindingURI
-	consensusFSM.RaftDir = c.RaftDirectoryPath
-	consensusFSM.RaftHttpBind = c.HttpBindingURI
-	consensusFSM.onTaskRequestFn = operator.operatorOnTaskRequested
-	consensusFSM.onTaskResponseFn = operator.operatorOnTaskResponse
+	consensusFSM.ConfigureRaftBindings(c.RaftBindingURI, c.HttpBindingURI, c.RaftDirectoryPath)
+	consensusFSM.ConfigureTaskCallbacks(operator.operatorOnTaskRequested, operator.operatorOnTaskResponse)
 	consensusFSM.setOperatorId(operatorId)
 
-	// Check for past operators via OperatorRegistered event on ServiceManager
-	results, err := avsReader.GetRegistedOperatorUrls(context.Background())
+	hasJoinedCluster, err := operator.AttemptToJoinCluster()
 
-	results.Next() // First log is always empty so skip it https://stackoverflow.com/questions/62831835/go-ethereum-ethclient-cannot-get-event-logs-data
-
-	if err != nil {
-		logger.Error("Failed to load urls", "err", err)
-	}
-
-	// If operator is joining an existing raft network make request to join
-	hasJoinedCluster := false
-	hasError := false
-
-	// Attempt to join existing operator raft cluster if it exist
-	for i := 0; i < 10; i++ {
-		event := results.Event
-
-		blockNumber, errr := ethRpcClient.BlockNumber(context.Background())
-		if errr != nil {
-			logger.Error("Cannot get blockNumber", "err", errr)
-			return nil, errr
-		}
-
-		logger.Info("Latest block number", "block", blockNumber)
-
-		// check if operatorId is different from this operator
-		if event.OperatorId.String() == common.HexToAddress(c.OperatorAddress).String() {
-			results.Next()
-			continue
-		} else {
-			url := event.HttpUrl
-
-			logger.Info("Attempting to join existing raft cluster", "joinUrl", url)
-
-			// initialize raft consensus  rpc server
-			consensusFSM.Initialize(false, c.OperatorAddress)
-
-			if err := consensusFSM.JoinExistingNetwork(url, c.RaftBindingURI, c.OperatorAddress, blockNumber); err != nil {
-				logger.Warn("failed to join node at", "url", url, "operatorId", event.OperatorId.String(), "err", err)
-				hasError = true
-				results.Next()
-			}
-			// Joined network
-			hasJoinedCluster = true
-			break
-		}
-
-	}
-
-	if !hasJoinedCluster && !hasError {
+	if !hasJoinedCluster && err == nil {
+		// Bootstrap a new raft cluster.
 		consensusFSM.Initialize(true, c.OperatorAddress)
 		logger.Info("Attempting to bootstrap raft cluster")
-	} else if !hasJoinedCluster && hasError {
-		logger.Error("Failed to join existing raft cluster")
+	} else if !hasJoinedCluster {
+		logger.Error("Failed to join an existing raft cluster or create a new one", "err", err)
 		return nil, err
 	}
+
+	///////////////////////////////////////////////////////////////////////////////////////
 
 	logger.Info("Operator info",
 		"operatorId", operatorId,
@@ -382,6 +337,8 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 	return operator, nil
 
 }
+
+////////////////////// Operator server functionallity /////////////////////
 
 func (o *Operator) Start(ctx context.Context) error {
 	operatorIsRegistered, err := o.avsReader.IsOperatorRegistered(&bind.CallOpts{}, o.operatorAddr)
@@ -622,6 +579,61 @@ func (o *Operator) sendAggregatedTaskResponseToContract(blsAggServiceResp blsagg
 	o.tasksMu.Unlock()
 }
 
+/////////// Methods used by raft consensus module ////////////////
+
+func (o *Operator) AttemptToJoinCluster() (hasJoinedCluster bool, err error) {
+	// Check for past operators via OperatorRegistered event on ServiceManager
+	results, err := o.avsReader.GetRegistedOperatorUrls(context.Background())
+
+	results.Next() // First log is always empty so skip it https://stackoverflow.com/questions/62831835/go-ethereum-ethclient-cannot-get-event-logs-data
+
+	if err != nil {
+		o.logger.Error("Failed to load urls", "err", err)
+	}
+
+	// If operator is joining an existing raft network make request to join
+	hasJoinedCluster = false
+	err = nil
+
+	// Attempt to join existing operator raft cluster if it exist
+	for i := 0; i < 10; i++ {
+		event := results.Event
+
+		blockNumber, errr := o.ethClient.BlockNumber(context.Background())
+		if errr != nil {
+			o.logger.Error("Cannot get blockNumber", "err", errr)
+			return false, errr
+		}
+
+		o.logger.Info("Latest block number", "block", blockNumber)
+
+		// check if operatorId is different from this operator
+		if event.OperatorId.String() == o.operatorAddr.String() {
+			results.Next()
+			continue
+		} else {
+			url := event.HttpUrl
+
+			o.logger.Info("Attempting to join existing raft cluster", "joinUrl", url)
+
+			// initialize raft consensus  rpc server
+			o.priceFSM.Initialize(false, o.operatorAddr.String())
+
+			if err := o.priceFSM.JoinExistingNetwork(url, o.priceFSM.RaftBind, o.operatorAddr.String(), blockNumber); err != nil {
+				o.logger.Warn("failed to join node at", "url", url, "operatorId", event.OperatorId.String(), "err", err)
+				err = err
+				// Go to next operator url to see if this operator can join
+				results.Next()
+			}
+			// Joined network
+			hasJoinedCluster = true
+			break
+		}
+	}
+	return hasJoinedCluster, err
+}
+
+// //////////////////////////// Utils //////////////////////////////////////
 func contains(s []string, str string) bool {
 	for _, v := range s {
 		if v == str {
@@ -649,6 +661,7 @@ func (o *Operator) operatorOnTaskRequested(taskRequest PriceUpdateRequest) ([]Pr
 		err = nil
 	} else {
 		chainlinkResponse = PriceUpdateTaskResponse{Price: uint32(resolvePrice.Uint64()), Source: "chainlink", TaskId: taskRequest.TaskId, Decimals: 18}
+		o.logger.Info("Chainlink price resolved", "price", resolvePrice.Uint64(), "decimals", 18, "taskId", taskRequest.TaskId, "feedName", taskRequest.FeedName)
 	}
 
 	//fetch dia price
@@ -659,6 +672,7 @@ func (o *Operator) operatorOnTaskRequested(taskRequest PriceUpdateRequest) ([]Pr
 		err = nil
 	} else {
 		diaResponse = PriceUpdateTaskResponse{Price: uint32(diaPrice.Uint64()), Source: "dia", TaskId: taskRequest.TaskId, Decimals: 8}
+		o.logger.Info("Dia price resolved", "price", diaPrice.Uint64(), "decimals", 8, "taskId", taskRequest.TaskId, "feedName", taskRequest.FeedName)
 	}
 
 	empty := PriceUpdateTaskResponse{}

@@ -30,7 +30,7 @@ import (
 
 const (
 	retainSnapshotCount = 2
-	raftTimeout         = 10 * time.Second
+	raftTimeout         = 5 * time.Second
 )
 
 type SignedTaskResponse[K any] struct {
@@ -73,6 +73,17 @@ func NewConcensusFSM[T any, K any, S any](keyPair *bls.KeyPair, pk *ecdsa.Privat
 		ethClient:             ethClient,
 		blsAggregationService: blsAggregationService,
 	}
+}
+
+func (p *PriceFSM[T, K, S]) ConfigureRaftBindings(rpcUrl string, httpUrl string, fileStorageDirectory string) {
+	p.RaftBind = rpcUrl
+	p.RaftDir = fileStorageDirectory
+	p.RaftHttpBind = httpUrl
+}
+
+func (p *PriceFSM[T, K, S]) ConfigureTaskCallbacks(onTaskRequestFn onTaskRequest[T, K], onTaskResponseFn onSubmitTaskToLeader[T, K, S]) {
+	p.onTaskRequestFn = onTaskRequestFn
+	p.onTaskResponseFn = onTaskResponseFn
 }
 
 // Operator initializes raft consenses server if enableSingle is set, and there are no existing peers,
