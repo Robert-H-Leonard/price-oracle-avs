@@ -6,7 +6,7 @@ toolchain go1.21.0
 
 require (
 	github.com/Layr-Labs/eigensdk-go v0.1.7-0.20240425202952-954cd7661775
-	github.com/Robert-H-Leonard/eigenShift v0.0.7
+	github.com/Robert-H-Leonard/eigenShift v0.0.11
 	github.com/ethereum/go-ethereum v1.13.14
 	github.com/hashicorp/raft v1.6.1
 	github.com/hashicorp/raft-boltdb v0.0.0-20231211162105-6c830fa4535e

@@ -2,7 +2,6 @@ package operator
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -91,7 +90,7 @@ type Operator struct {
 	// needed to fetch the price of assets on different on-chain oracle networks
 	priceFeedAdapter *priceFeedAdapter.ContractPriceFeedAdapter
 
-	priceFSM *taskconsensus.PriceFSM[PriceUpdateRequest, PriceUpdateTaskResponse, taskconsensus.SignedTaskResponse[PriceUpdateTaskResponse]]
+	taskConsensusManager taskconsensus.TaskConsensusManager[PriceUpdateRequest, PriceUpdateTaskResponse, taskconsensus.SignedTaskResponse[PriceUpdateTaskResponse]]
 }
 
 type PriceUpdateRequest struct {
@@ -282,7 +281,7 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 		credibleSquaringServiceManagerAddr: common.HexToAddress(c.AVSRegistryCoordinatorAddress),
 		operatorId:                         [32]byte{0}, // this is set below
 		priceFeedAdapter:                   priceFeedClient,
-		priceFSM:                           nil,
+		taskConsensusManager:               nil,
 		tasks:                              make(map[uint32]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTask),
 		taskResponses:                      taskResponses,
 		taskDigestQuorum:                   make(map[uint32]TaskDigestQuorum),
@@ -305,21 +304,37 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 	/////////////////////// Raft Cluster Consensus Integration ///////////////////////////////
 
 	// setup raft consensus client
-	consensusFSM := taskconsensus.NewConcensusFSM[PriceUpdateRequest, PriceUpdateTaskResponse, taskconsensus.SignedTaskResponse[PriceUpdateTaskResponse]](blsKeyPair, operatorEcdsaPrivateKey, blsAggregationService, ethRpcClient, logger)
-	operator.priceFSM = consensusFSM
 
-	// start http server with additional raft endpoints
-	consensusFSM.InitializeHttpServer(c.HttpBindingURI, operator.operatorLeaderSubmitBlsResponse, operator.isValidOperator, operator.fetchOperatorUrl)
+	// custom callbacks for the price oracle AVS
+	callbacks := taskconsensus.TaskConsensusCallbacks[PriceUpdateRequest, PriceUpdateTaskResponse, taskconsensus.SignedTaskResponse[PriceUpdateTaskResponse]]{
+		OnTaskRequestFn:             operator.operatorOnTaskRequested,
+		OnTaskResponseFn:            operator.operatorOnTaskResponse,
+		IsValidOperator:             operator.isValidOperator,
+		OnLeaderProcessTaskResponse: operator.onLeaderProcessTaskResponse,
+		FetchOperatorUrl:            operator.fetchOperatorUrl,
+	}
 
-	// Setup raft cluster config
-	consensusFSM.ConfigureRaftBindings(c.RaftBindingURI, c.HttpBindingURI, c.RaftDirectoryPath, operatorId)
-	consensusFSM.ConfigureTaskCallbacks(operator.operatorOnTaskRequested, operator.operatorOnTaskResponse)
+	// operator raft bindings
+	raftConfig := taskconsensus.OperatorRaftConfig{
+		HttpUrl:              c.HttpBindingURI,
+		RpcUrl:               c.RaftBindingURI,
+		FileStorageDirectory: c.RaftDirectoryPath,
+		OperatorId:           operator.operatorId,
+	}
+	taskConsensusManager, err := taskconsensus.NewAVSConcensusEngine[PriceUpdateRequest, PriceUpdateTaskResponse, taskconsensus.SignedTaskResponse[PriceUpdateTaskResponse]](blsKeyPair, operatorEcdsaPrivateKey, blsAggregationService, ethRpcClient, logger, callbacks, raftConfig)
+
+	if err != nil {
+		logger.Error("Failed to initialize task consensus engine", "err", err)
+		return nil, err
+	}
+
+	operator.taskConsensusManager = taskConsensusManager
 
 	hasJoinedCluster, err := operator.AttemptToJoinCluster()
 
 	if !hasJoinedCluster && err == nil {
 		// Bootstrap a new raft cluster.
-		consensusFSM.Initialize(true, c.OperatorAddress)
+		taskConsensusManager.InitializeRaftRpcServer(true, c.OperatorAddress)
 		logger.Info("Attempting to bootstrap raft cluster")
 	} else if !hasJoinedCluster {
 		logger.Error("Failed to join an existing raft cluster or create a new one", "err", err)
@@ -414,7 +429,7 @@ func (o *Operator) Start(ctx context.Context) error {
 
 func (o *Operator) ProcessNewPriceUpdateCreatedLog(newPriceUpdateTaskCreatedLog *cstaskmanager.ContractIncredibleSquaringTaskManagerPriceUpdateRequested) error {
 	// If not leader ignore request
-	isLeader, _ := o.priceFSM.IsLeader()
+	isLeader, _ := o.taskConsensusManager.IsLeader()
 
 	if !isLeader {
 		o.logger.Info("Waiting for leader request for feed",
@@ -432,25 +447,19 @@ func (o *Operator) ProcessNewPriceUpdateCreatedLog(newPriceUpdateTaskCreatedLog 
 		"quorumThreshholdPercentage", newPriceUpdateTaskCreatedLog.Task.QuorumThresholdPercentage,
 	)
 
-	data := &PriceUpdateRequest{
+	data := PriceUpdateRequest{
 		FeedName:  string(newPriceUpdateTaskCreatedLog.Task.FeedName[:]),
 		TaskId:    newPriceUpdateTaskCreatedLog.TaskIndex,
-		LeaderUrl: o.priceFSM.RaftHttpBind, // This is the url of the leader making the request
+		LeaderUrl: o.taskConsensusManager.GetHttpBindingUrl(), // This is the url of the leader making the request
 	}
 
-	dataBytes, err := json.Marshal(data)
-
-	if err != nil {
-		o.logger.Error("Failed to request task", "err", err)
-	}
-
-	o.priceFSM.LeaderSendTaskRequestToFollowers(dataBytes)
+	err := o.taskConsensusManager.LeaderSendTaskRequestToFollowers(data)
 	return err
 }
 
 func (o *Operator) sendNewTask(feedName string) error {
 	// If not leader ignore request
-	isLeader, _ := o.priceFSM.IsLeader()
+	isLeader, _ := o.taskConsensusManager.IsLeader()
 
 	if !isLeader {
 		return nil // Only leader create task
@@ -488,7 +497,7 @@ func (o *Operator) sendNewTask(feedName string) error {
 // Triggered whenever a taskDigest (ie. hash of {price, taskId, source}) is at quorom
 func (o *Operator) sendAggregatedTaskResponseToContract(blsAggServiceResp blsagg.BlsAggregationServiceResponse) {
 	// If not leader ignore request
-	isLeader, _ := o.priceFSM.IsLeader()
+	isLeader, _ := o.taskConsensusManager.IsLeader()
 
 	if !isLeader {
 		return // Only leader can submit aggregate task
@@ -575,12 +584,10 @@ func (o *Operator) sendAggregatedTaskResponseToContract(blsAggServiceResp blsagg
 		}
 
 		// Elect new operator as leader
-		o.priceFSM.TriggerElection()
+		o.taskConsensusManager.TriggerElection()
 	}
 	o.tasksMu.Unlock()
 }
-
-/////////// Methods used by raft consensus module ////////////////
 
 func (o *Operator) AttemptToJoinCluster() (hasJoinedCluster bool, err error) {
 	// Check for past operators via OperatorRegistered event on ServiceManager
@@ -618,9 +625,9 @@ func (o *Operator) AttemptToJoinCluster() (hasJoinedCluster bool, err error) {
 			o.logger.Info("Attempting to join existing raft cluster", "joinUrl", url)
 
 			// initialize raft consensus  rpc server
-			o.priceFSM.Initialize(false, o.operatorAddr.String())
+			o.taskConsensusManager.InitializeRaftRpcServer(false, o.operatorAddr.String())
 
-			if err := o.priceFSM.JoinExistingNetwork(url, o.priceFSM.RaftBind, o.operatorAddr.String(), blockNumber); err != nil {
+			if err := o.taskConsensusManager.JoinExistingOperatorCluster(url, blockNumber); err != nil {
 				o.logger.Warn("failed to join node at", "url", url, "operatorId", event.OperatorId.String(), "err", err)
 				err = err
 				// Go to next operator url to see if this operator can join
@@ -721,9 +728,8 @@ func (o *Operator) operatorOnTaskResponse(taskRequest PriceUpdateRequest, taskRe
 	return signedTaskResponse, taskRequest.LeaderUrl, nil
 }
 
-func (o *Operator) operatorLeaderSubmitBlsResponse(task PriceUpdateTaskResponse, w http.ResponseWriter) (taskIndex uint32, taskResponseDigest [32]byte) {
+func (o *Operator) onLeaderProcessTaskResponse(task PriceUpdateTaskResponse, w http.ResponseWriter) (taskIndex uint32, taskResponseDigest [32]byte) {
 	// Submit each price feed source seperatly
-	o.logger.Info("Preparing to submit bls signatures")
 
 	currentTaskIndex := task.TaskId
 	taskResponseDigest, err := core.GetTaskResponseDigest(task.Price, task.Source, task.TaskId, task.Decimals)
@@ -766,19 +772,16 @@ func (o *Operator) isValidOperator(operatorAddress common.Address) (bool, error)
 	return isValid, nil
 }
 
-func (o *Operator) fetchOperatorUrl(operatorAddress common.Address) (struct {
-	HttpUrl string
-	RpcUrl  string
-}, error) {
+func (o *Operator) fetchOperatorUrl(operatorAddress common.Address) (taskconsensus.OperatorRaftConfig, error) {
 	validOperatorUrls, err := o.avsReader.FetchOperatorUrl(context.Background(), operatorAddress) // generic callbacks (1. Validate operator address. 2. Fetch operator urls)
 
 	if err != nil {
 		o.logger.Warn("Failed to fetch url for operator", "address", operatorAddress, "error", err)
-		return struct {
-			HttpUrl string
-			RpcUrl  string
-		}{}, err
+		return taskconsensus.OperatorRaftConfig{}, err
 	}
 
-	return validOperatorUrls, nil
+	return taskconsensus.OperatorRaftConfig{
+		HttpUrl: validOperatorUrls.HttpUrl,
+		RpcUrl:  validOperatorUrls.RpcUrl,
+	}, nil
 }
