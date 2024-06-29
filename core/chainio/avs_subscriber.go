@@ -9,15 +9,15 @@ import (
 	"github.com/Layr-Labs/eigensdk-go/chainio/clients/eth"
 	sdklogging "github.com/Layr-Labs/eigensdk-go/logging"
 
-	cstaskmanager "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/IncredibleSquaringTaskManager"
+	cstaskmanager "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/PriceAggregatorTaskManager"
 	"github.com/Layr-Labs/incredible-squaring-avs/core/config"
 )
 
 type AvsSubscriberer interface {
-	SubscribeToNewTasks(newTaskCreatedChan chan *cstaskmanager.ContractIncredibleSquaringTaskManagerNewTaskCreated) event.Subscription
-	SubscribeToNewPriceUpdateTask(newPriceUpdateTaskCreatedChan chan *cstaskmanager.ContractIncredibleSquaringTaskManagerPriceUpdateRequested) event.Subscription
-	SubscribeToTaskResponses(taskResponseLogs chan *cstaskmanager.ContractIncredibleSquaringTaskManagerTaskResponded) event.Subscription
-	ParseTaskResponded(rawLog types.Log) (*cstaskmanager.ContractIncredibleSquaringTaskManagerTaskResponded, error)
+	SubscribeToNewTasks(newTaskCreatedChan chan *cstaskmanager.ContractPriceAggregatorTaskManagerNewTaskCreated) event.Subscription
+	SubscribeToNewPriceUpdateTask(newPriceUpdateTaskCreatedChan chan *cstaskmanager.ContractPriceAggregatorTaskManagerPriceUpdateRequested) event.Subscription
+	SubscribeToTaskResponses(taskResponseLogs chan *cstaskmanager.ContractPriceAggregatorTaskManagerTaskResponded) event.Subscription
+	ParseTaskResponded(rawLog types.Log) (*cstaskmanager.ContractPriceAggregatorTaskManagerTaskResponded, error)
 }
 
 // Subscribers use a ws connection instead of http connection like Readers
@@ -54,7 +54,7 @@ func NewAvsSubscriber(avsContractBindings *AvsManagersBindings, logger sdkloggin
 	}
 }
 
-func (s *AvsSubscriber) SubscribeToNewTasks(newTaskCreatedChan chan *cstaskmanager.ContractIncredibleSquaringTaskManagerNewTaskCreated) event.Subscription {
+func (s *AvsSubscriber) SubscribeToNewTasks(newTaskCreatedChan chan *cstaskmanager.ContractPriceAggregatorTaskManagerNewTaskCreated) event.Subscription {
 	sub, err := s.AvsContractBindings.TaskManager.WatchNewTaskCreated(
 		&bind.WatchOpts{}, newTaskCreatedChan, nil,
 	)
@@ -65,7 +65,7 @@ func (s *AvsSubscriber) SubscribeToNewTasks(newTaskCreatedChan chan *cstaskmanag
 	return sub
 }
 
-func (s *AvsSubscriber) SubscribeToNewPriceUpdateTask(newPriceUpdateTaskCreatedChan chan *cstaskmanager.ContractIncredibleSquaringTaskManagerPriceUpdateRequested) event.Subscription {
+func (s *AvsSubscriber) SubscribeToNewPriceUpdateTask(newPriceUpdateTaskCreatedChan chan *cstaskmanager.ContractPriceAggregatorTaskManagerPriceUpdateRequested) event.Subscription {
 	sub, err := s.AvsContractBindings.TaskManager.WatchPriceUpdateRequested(
 		&bind.WatchOpts{}, newPriceUpdateTaskCreatedChan, nil,
 	)
@@ -76,7 +76,7 @@ func (s *AvsSubscriber) SubscribeToNewPriceUpdateTask(newPriceUpdateTaskCreatedC
 	return sub
 }
 
-func (s *AvsSubscriber) SubscribeToTaskResponses(taskResponseChan chan *cstaskmanager.ContractIncredibleSquaringTaskManagerTaskResponded) event.Subscription {
+func (s *AvsSubscriber) SubscribeToTaskResponses(taskResponseChan chan *cstaskmanager.ContractPriceAggregatorTaskManagerTaskResponded) event.Subscription {
 	sub, err := s.AvsContractBindings.TaskManager.WatchTaskResponded(
 		&bind.WatchOpts{}, taskResponseChan, nil,
 	)
@@ -87,6 +87,6 @@ func (s *AvsSubscriber) SubscribeToTaskResponses(taskResponseChan chan *cstaskma
 	return sub
 }
 
-func (s *AvsSubscriber) ParseTaskResponded(rawLog types.Log) (*cstaskmanager.ContractIncredibleSquaringTaskManagerTaskResponded, error) {
-	return s.AvsContractBindings.TaskManager.ContractIncredibleSquaringTaskManagerFilterer.ParseTaskResponded(rawLog)
+func (s *AvsSubscriber) ParseTaskResponded(rawLog types.Log) (*cstaskmanager.ContractPriceAggregatorTaskManagerTaskResponded, error) {
+	return s.AvsContractBindings.TaskManager.ContractPriceAggregatorTaskManagerFilterer.ParseTaskResponded(rawLog)
 }

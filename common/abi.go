@@ -4,5 +4,5 @@ import (
 	_ "embed"
 )
 
-//go:embed abis/IncredibleSquaringTaskManager.json
-var IncredibleSquaringTaskManagerAbi []byte
+//go:embed abis/PriceAggregatorTaskManager.json
+var PriceAggregatorTaskManagerAbi []byte

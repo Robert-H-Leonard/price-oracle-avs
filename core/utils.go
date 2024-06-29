@@ -4,7 +4,7 @@ import (
 	"math/big"
 
 	"github.com/Layr-Labs/eigensdk-go/crypto/bls"
-	cstaskmanager "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/IncredibleSquaringTaskManager"
+	cstaskmanager "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/PriceAggregatorTaskManager"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"golang.org/x/crypto/sha3"
 )
@@ -16,11 +16,11 @@ type PriceUpdateTaskResponse struct {
 	Source   string
 }
 
-// this hardcodes abi.encode() for cstaskmanager.IIncredibleSquaringTaskManagerTaskResponse
+// this hardcodes abi.encode() for cstaskmanager.IPriceAggregatorTaskManagerTaskResponse
 // unclear why abigen doesn't provide this out of the box...
 func AbiEncodeTaskResponse(price uint32, source string, taskId uint32, decimals uint32) ([]byte, error) {
 	priceUpdate := &PriceUpdateTaskResponse{Price: price, Source: source, TaskId: taskId}
-	// The order here has to match the field ordering of cstaskmanager.IIncredibleSquaringTaskManagerTaskResponse
+	// The order here has to match the field ordering of cstaskmanager.IPriceAggregatorTaskManagerTaskResponse
 	taskResponseType, err := abi.NewType("tuple", "", []abi.ArgumentMarshaling{
 		{
 			Name: "price",
