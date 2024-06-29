@@ -11,8 +11,8 @@ import (
 	logging "github.com/Layr-Labs/eigensdk-go/logging"
 
 	erc20mock "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/ERC20Mock"
-	csserviceManager "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/IncredibleSquaringServiceManager"
-	cstaskmanager "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/IncredibleSquaringTaskManager"
+	csserviceManager "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/PriceAggregatorServiceManager"
+	cstaskmanager "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/PriceAggregatorTaskManager"
 	"github.com/Layr-Labs/incredible-squaring-avs/core/config"
 )
 
@@ -23,7 +23,7 @@ type AvsReaderer interface {
 		ctx context.Context, msgHash [32]byte, quorumNumbers []byte, referenceBlockNumber uint32, nonSignerStakesAndSignature cstaskmanager.IBLSSignatureCheckerNonSignerStakesAndSignature,
 	) (cstaskmanager.IBLSSignatureCheckerQuorumStakeTotals, error)
 	GetErc20Mock(ctx context.Context, tokenAddr gethcommon.Address) (*erc20mock.ContractERC20Mock, error)
-	GetRegistedOperatorUrls(ctx context.Context) (*csserviceManager.ContractIncredibleSquaringServiceManagerOperatorUrlRegisteredIterator, error)
+	GetRegistedOperatorUrls(ctx context.Context) (*csserviceManager.ContractPriceAggregatorServiceManagerOperatorUrlRegisteredIterator, error)
 	IsValidOperator(ctx context.Context, operatorAddress gethcommon.Address) (bool, error)
 	FetchOperatorUrl(ctx context.Context, operatorAddress gethcommon.Address) (struct {
 		HttpUrl string
@@ -82,7 +82,7 @@ func (r *AvsReader) GetErc20Mock(ctx context.Context, tokenAddr gethcommon.Addre
 	return erc20Mock, nil
 }
 
-func (r *AvsReader) GetRegistedOperatorUrls(ctx context.Context) (*csserviceManager.ContractIncredibleSquaringServiceManagerOperatorUrlRegisteredIterator, error) {
+func (r *AvsReader) GetRegistedOperatorUrls(ctx context.Context) (*csserviceManager.ContractPriceAggregatorServiceManagerOperatorUrlRegisteredIterator, error) {
 	data, err := r.AvsServiceBindings.ServiceManager.FilterOperatorUrlRegistered(nil)
 	return data, err
 }

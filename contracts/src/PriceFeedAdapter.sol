@@ -32,6 +32,7 @@ contract PriceFeedAdapter is Ownable {
         emit FeedRemoved(_symbol);
     }
 
+    // Method that operators use to fetch chainlink price feeds
     function getLatestPrice(string memory _symbol) external view returns (int) {
         AggregatorV3Interface feed = feeds[_symbol];
         require(address(feed) != address(0), "Feed not found.");
@@ -40,6 +41,7 @@ contract PriceFeedAdapter is Ownable {
         return price;
     }
 
+    // Method that operators use to fetch dia price feeds
     function getPriceDia(string memory _symbol) external view returns (uint128 Price){
         (, Price) = IDIAOracleV2(diaORACLE).getValue(_symbol);
         return Price;

@@ -9,6 +9,7 @@ import {IAVSDirectory} from "@eigenlayer/contracts/interfaces/IAVSDirectory.sol"
 import {IStrategyManager, IStrategy} from "@eigenlayer/contracts/interfaces/IStrategyManager.sol";
 import {ISlasher} from "@eigenlayer/contracts/interfaces/ISlasher.sol";
 import {StrategyBaseTVLLimits} from "@eigenlayer/contracts/strategies/StrategyBaseTVLLimits.sol";
+import "@eigenlayer-middleware/src/ServiceManagerBase.sol";
 import "@eigenlayer/test/mocks/EmptyContract.sol";
 
 import "@eigenlayer-middleware/src/RegistryCoordinator.sol" as regcoord;
@@ -18,9 +19,9 @@ import {IndexRegistry} from "@eigenlayer-middleware/src/IndexRegistry.sol";
 import {StakeRegistry} from "@eigenlayer-middleware/src/StakeRegistry.sol";
 import "@eigenlayer-middleware/src/OperatorStateRetriever.sol";
 
-import {IncredibleSquaringServiceManager, IServiceManager} from "../src/IncredibleSquaringServiceManager.sol";
-import {IncredibleSquaringTaskManager} from "../src/IncredibleSquaringTaskManager.sol";
-import {IIncredibleSquaringTaskManager} from "../src/IIncredibleSquaringTaskManager.sol";
+import {PriceAggregatorServiceManager, IServiceManager} from "../src/PriceAggregatorServiceManager.sol";
+import {PriceAggregatorTaskManager} from "../src/PriceAggregatorTaskManager.sol";
+import {IPriceAggregatorTaskManager} from "../src/IPriceAggregatorTaskManager.sol";
 import {PriceFeedAdapter} from "../src/PriceFeedAdapter.sol";
 import "../src/ERC20Mock.sol";
 
@@ -33,7 +34,7 @@ import "forge-std/console.sol";
 
 // # To deploy and verify our contract
 // forge script script/CredibleSquaringDeployer.s.sol:CredibleSquaringDeployer --rpc-url $RPC_URL  --private-key $PRIVATE_KEY --broadcast -vvvv
-contract IncredibleSquaringDeployer is Script, Utils {
+contract PriceAggregatorDeployer is Script, Utils {
     // DEPLOYMENT CONSTANTS
     uint256 public constant QUORUM_THRESHOLD_PERCENTAGE = 100;
     uint32 public constant TASK_RESPONSE_WINDOW_BLOCK = 30;
@@ -67,12 +68,11 @@ contract IncredibleSquaringDeployer is Script, Utils {
 
     OperatorStateRetriever public operatorStateRetriever;
 
-    IncredibleSquaringServiceManager public incredibleSquaringServiceManager;
-    IServiceManager public incredibleSquaringServiceManagerImplementation;
+    PriceAggregatorServiceManager public priceAggregatorServiceManager;
+    IServiceManager public priceAggregatorServiceManagerImplementation;
 
-    IncredibleSquaringTaskManager public incredibleSquaringTaskManager;
-    IIncredibleSquaringTaskManager
-        public incredibleSquaringTaskManagerImplementation;
+    PriceAggregatorTaskManager public priceAggregatorTaskManager;
+    IPriceAggregatorTaskManager public priceAggregatorTaskManagerImplementation;
 
     PriceFeedAdapter public priceAdapter;
 
@@ -211,7 +211,7 @@ contract IncredibleSquaringDeployer is Script, Utils {
          * First, deploy upgradeable proxy contracts that **will point** to the implementations. Since the implementation contracts are
          * not yet deployed, we give these proxies an empty contract as the initial implementation, to act as if they have no code.
          */
-        incredibleSquaringServiceManager = IncredibleSquaringServiceManager(
+        priceAggregatorServiceManager = PriceAggregatorServiceManager(
             address(
                 new TransparentUpgradeableProxy(
                     address(emptyContract),
@@ -220,7 +220,7 @@ contract IncredibleSquaringDeployer is Script, Utils {
                 )
             )
         );
-        incredibleSquaringTaskManager = IncredibleSquaringTaskManager(
+        priceAggregatorTaskManager = PriceAggregatorTaskManager(
             address(
                 new TransparentUpgradeableProxy(
                     address(emptyContract),
@@ -300,7 +300,7 @@ contract IncredibleSquaringDeployer is Script, Utils {
         }
 
         registryCoordinatorImplementation = new regcoord.RegistryCoordinator(
-            incredibleSquaringServiceManager,
+            priceAggregatorServiceManager,
             regcoord.IStakeRegistry(address(stakeRegistry)),
             regcoord.IBLSApkRegistry(address(blsApkRegistry)),
             regcoord.IIndexRegistry(address(indexRegistry))
@@ -366,21 +366,21 @@ contract IncredibleSquaringDeployer is Script, Utils {
             );
         }
 
-        incredibleSquaringServiceManagerImplementation = new IncredibleSquaringServiceManager(
+        priceAggregatorServiceManagerImplementation = new PriceAggregatorServiceManager(
             avsDirectory,
             registryCoordinator,
             stakeRegistry,
-            incredibleSquaringTaskManager
+            priceAggregatorTaskManager
         );
         // Third, upgrade the proxy contracts to use the correct implementation contracts and initialize them.
         incredibleSquaringProxyAdmin.upgrade(
             TransparentUpgradeableProxy(
-                payable(address(incredibleSquaringServiceManager))
+                payable(address(priceAggregatorServiceManager))
             ),
-            address(incredibleSquaringServiceManagerImplementation)
+            address(priceAggregatorServiceManagerImplementation)
         );
 
-        incredibleSquaringTaskManagerImplementation = new IncredibleSquaringTaskManager(
+        priceAggregatorTaskManagerImplementation = new PriceAggregatorTaskManager(
             registryCoordinator,
             TASK_RESPONSE_WINDOW_BLOCK
         );
@@ -388,11 +388,11 @@ contract IncredibleSquaringDeployer is Script, Utils {
         // Third, upgrade the proxy contracts to use the correct implementation contracts and initialize them.
         incredibleSquaringProxyAdmin.upgradeAndCall(
             TransparentUpgradeableProxy(
-                payable(address(incredibleSquaringTaskManager))
+                payable(address(priceAggregatorTaskManager))
             ),
-            address(incredibleSquaringTaskManagerImplementation),
+            address(priceAggregatorTaskManagerImplementation),
             abi.encodeWithSelector(
-                incredibleSquaringTaskManager.initialize.selector,
+                priceAggregatorTaskManager.initialize.selector,
                 incredibleSquaringPauserReg,
                 incredibleSquaringCommunityMultisig,
                 AGGREGATOR_ADDR,
@@ -417,22 +417,22 @@ contract IncredibleSquaringDeployer is Script, Utils {
         vm.serializeAddress(
             deployed_addresses,
             "credibleSquaringServiceManager",
-            address(incredibleSquaringServiceManager)
+            address(priceAggregatorServiceManager)
         );
         vm.serializeAddress(
             deployed_addresses,
             "credibleSquaringServiceManagerImplementation",
-            address(incredibleSquaringServiceManagerImplementation)
+            address(priceAggregatorServiceManagerImplementation)
         );
         vm.serializeAddress(
             deployed_addresses,
             "credibleSquaringTaskManager",
-            address(incredibleSquaringTaskManager)
+            address(priceAggregatorTaskManager)
         );
         vm.serializeAddress(
             deployed_addresses,
             "credibleSquaringTaskManagerImplementation",
-            address(incredibleSquaringTaskManagerImplementation)
+            address(priceAggregatorTaskManagerImplementation)
         );
         vm.serializeAddress(
             deployed_addresses,

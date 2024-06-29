@@ -12,25 +12,25 @@ import (
 	logging "github.com/Layr-Labs/eigensdk-go/logging"
 	sdktypes "github.com/Layr-Labs/eigensdk-go/types"
 
-	cstaskmanager "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/IncredibleSquaringTaskManager"
+	cstaskmanager "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/PriceAggregatorTaskManager"
 	"github.com/Layr-Labs/incredible-squaring-avs/core/config"
 )
 
 type AvsWriterer interface {
 	avsregistry.AvsRegistryWriter
 
-	SendNewPriceUpdate(ctx context.Context, feedName string) (cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTask, uint32, error)
+	SendNewPriceUpdate(ctx context.Context, feedName string) (cstaskmanager.IPriceAggregatorTaskManagerPriceUpdateTask, uint32, error)
 	ResigterOperatorUrl(ctx context.Context, raftHttpUrl string, raftRpcUrl string) error
 	RaiseChallenge(
 		ctx context.Context,
-		task cstaskmanager.IIncredibleSquaringTaskManagerTask,
-		taskResponse cstaskmanager.IIncredibleSquaringTaskManagerTaskResponse,
-		taskResponseMetadata cstaskmanager.IIncredibleSquaringTaskManagerTaskResponseMetadata,
+		task cstaskmanager.IPriceAggregatorTaskManagerTask,
+		taskResponse cstaskmanager.IPriceAggregatorTaskManagerTaskResponse,
+		taskResponseMetadata cstaskmanager.IPriceAggregatorTaskManagerTaskResponseMetadata,
 		pubkeysOfNonSigningOperators []cstaskmanager.BN254G1Point,
 	) (*types.Receipt, error)
 	SendAggregatedResponse(ctx context.Context,
-		task cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTask,
-		taskResponses []cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse,
+		task cstaskmanager.IPriceAggregatorTaskManagerPriceUpdateTask,
+		taskResponses []cstaskmanager.IPriceAggregatorTaskManagerPriceUpdateTaskResponse,
 		nonSignerStakesAndSignatures []cstaskmanager.IBLSSignatureCheckerNonSignerStakesAndSignature,
 	) (*types.Receipt, error)
 }
@@ -92,7 +92,7 @@ func (w *AvsWriter) ResigterOperatorUrl(ctx context.Context, raftHttpUrl string,
 		return err
 	}
 
-	url, err := w.AvsContractBindings.ServiceManager.ContractIncredibleSquaringServiceManagerFilterer.ParseOperatorUrlRegistered(*receipt.Logs[0])
+	url, err := w.AvsContractBindings.ServiceManager.ContractPriceAggregatorServiceManagerFilterer.ParseOperatorUrlRegistered(*receipt.Logs[0])
 
 	if err != nil {
 		w.logger.Error("Operator failed to register consensus url", "err", err)
@@ -105,11 +105,11 @@ func (w *AvsWriter) ResigterOperatorUrl(ctx context.Context, raftHttpUrl string,
 }
 
 // returns the tx receipt, as well as the task index (which it gets from parsing the tx receipt logs)
-func (w *AvsWriter) SendNewPriceUpdate(ctx context.Context, feedName string) (cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTask, uint32, error) {
+func (w *AvsWriter) SendNewPriceUpdate(ctx context.Context, feedName string) (cstaskmanager.IPriceAggregatorTaskManagerPriceUpdateTask, uint32, error) {
 	txOpts, err := w.TxMgr.GetNoSendTxOpts()
 	if err != nil {
 		w.logger.Errorf("Error getting tx opts")
-		return cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTask{}, 0, err
+		return cstaskmanager.IPriceAggregatorTaskManagerPriceUpdateTask{}, 0, err
 	}
 
 	// Read task quorum threshold on chain
@@ -121,24 +121,24 @@ func (w *AvsWriter) SendNewPriceUpdate(ctx context.Context, feedName string) (cs
 	tx, err := w.AvsContractBindings.TaskManager.RequestPriceFeedUpdate(txOpts, feedName, uint32(sdktypes.QuorumThresholdPercentage(67)), sdktypes.QuorumNums{0}.UnderlyingType(), uint8(1))
 	if err != nil {
 		w.logger.Errorf("Error assembling CreateNewTask tx")
-		return cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTask{}, 0, err
+		return cstaskmanager.IPriceAggregatorTaskManagerPriceUpdateTask{}, 0, err
 	}
 	receipt, err := w.TxMgr.Send(ctx, tx)
 	if err != nil {
 		w.logger.Errorf("Error submitting CreateNewTask tx")
-		return cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTask{}, 0, err
+		return cstaskmanager.IPriceAggregatorTaskManagerPriceUpdateTask{}, 0, err
 	}
-	newTaskCreatedEvent, err := w.AvsContractBindings.TaskManager.ContractIncredibleSquaringTaskManagerFilterer.ParsePriceUpdateRequested(*receipt.Logs[0])
+	newTaskCreatedEvent, err := w.AvsContractBindings.TaskManager.ContractPriceAggregatorTaskManagerFilterer.ParsePriceUpdateRequested(*receipt.Logs[0])
 	if err != nil {
 		w.logger.Error("Aggregator failed to parse new task created event", "err", err)
-		return cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTask{}, 0, err
+		return cstaskmanager.IPriceAggregatorTaskManagerPriceUpdateTask{}, 0, err
 	}
 	return newTaskCreatedEvent.Task, newTaskCreatedEvent.TaskIndex, nil
 }
 
 func (w *AvsWriter) SendAggregatedResponse(
-	ctx context.Context, task cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTask,
-	taskResponses []cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse,
+	ctx context.Context, task cstaskmanager.IPriceAggregatorTaskManagerPriceUpdateTask,
+	taskResponses []cstaskmanager.IPriceAggregatorTaskManagerPriceUpdateTaskResponse,
 	nonSignerStakesAndSignatures []cstaskmanager.IBLSSignatureCheckerNonSignerStakesAndSignature,
 ) (*types.Receipt, error) {
 	txOpts, err := w.TxMgr.GetNoSendTxOpts()
@@ -161,9 +161,9 @@ func (w *AvsWriter) SendAggregatedResponse(
 
 func (w *AvsWriter) RaiseChallenge(
 	ctx context.Context,
-	task cstaskmanager.IIncredibleSquaringTaskManagerTask,
-	taskResponse cstaskmanager.IIncredibleSquaringTaskManagerTaskResponse,
-	taskResponseMetadata cstaskmanager.IIncredibleSquaringTaskManagerTaskResponseMetadata,
+	task cstaskmanager.IPriceAggregatorTaskManagerTask,
+	taskResponse cstaskmanager.IPriceAggregatorTaskManagerTaskResponse,
+	taskResponseMetadata cstaskmanager.IPriceAggregatorTaskManagerTaskResponseMetadata,
 	pubkeysOfNonSigningOperators []cstaskmanager.BN254G1Point,
 ) (*types.Receipt, error) {
 	txOpts, err := w.TxMgr.GetNoSendTxOpts()

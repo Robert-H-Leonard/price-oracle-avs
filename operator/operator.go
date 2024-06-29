@@ -15,7 +15,7 @@ import (
 
 	taskconsensus "github.com/Robert-H-Leonard/eigenShift/task-consensus"
 
-	cstaskmanager "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/IncredibleSquaringTaskManager"
+	cstaskmanager "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/PriceAggregatorTaskManager"
 	priceFeedAdapter "github.com/Layr-Labs/incredible-squaring-avs/contracts/bindings/PriceFeedAdapter"
 	"github.com/Layr-Labs/incredible-squaring-avs/core"
 	"github.com/Layr-Labs/incredible-squaring-avs/core/chainio"
@@ -73,17 +73,17 @@ type Operator struct {
 	operatorId       sdktypes.OperatorId
 	operatorAddr     common.Address
 	// receive new tasks in this chan (typically from listening to onchain event)
-	newTaskCreatedChan            chan *cstaskmanager.ContractIncredibleSquaringTaskManagerNewTaskCreated
-	newPriceUpdateTaskCreatedChan chan *cstaskmanager.ContractIncredibleSquaringTaskManagerPriceUpdateRequested
+	newTaskCreatedChan            chan *cstaskmanager.ContractPriceAggregatorTaskManagerNewTaskCreated
+	newPriceUpdateTaskCreatedChan chan *cstaskmanager.ContractPriceAggregatorTaskManagerPriceUpdateRequested
 
 	// needed when opting in to avs (allow this service manager contract to slash operator)
 	credibleSquaringServiceManagerAddr common.Address
 
 	// aggregation related fields
 	blsAggregationService blsagg.BlsAggregationService
-	tasks                 map[uint32]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTask
+	tasks                 map[uint32]cstaskmanager.IPriceAggregatorTaskManagerPriceUpdateTask
 	tasksMu               sync.RWMutex
-	taskResponses         map[uint32]map[sdktypes.TaskResponseDigest]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse
+	taskResponses         map[uint32]map[sdktypes.TaskResponseDigest]cstaskmanager.IPriceAggregatorTaskManagerPriceUpdateTaskResponse
 	taskDigestQuorum      map[uint32]TaskDigestQuorum
 	taskResponsesMu       sync.RWMutex
 
@@ -107,7 +107,7 @@ type PriceUpdateTaskResponse struct {
 }
 
 type TaskDigestQuorum struct {
-	finalTaskResponse           cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse
+	finalTaskResponse           cstaskmanager.IPriceAggregatorTaskManagerPriceUpdateTaskResponse
 	nonSignerStakesAndSignature cstaskmanager.IBLSSignatureCheckerNonSignerStakesAndSignature
 }
 
@@ -259,7 +259,7 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 		return nil, err
 	}
 
-	taskResponses := make(map[uint32]map[sdktypes.TaskResponseDigest]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse)
+	taskResponses := make(map[uint32]map[sdktypes.TaskResponseDigest]cstaskmanager.IPriceAggregatorTaskManagerPriceUpdateTaskResponse)
 
 	operator := &Operator{
 		config:                             c,
@@ -276,13 +276,13 @@ func NewOperatorFromConfig(c types.NodeConfig) (*Operator, error) {
 		blsKeypair:                         blsKeyPair,
 		blsAggregationService:              blsAggregationService,
 		operatorAddr:                       common.HexToAddress(c.OperatorAddress),
-		newTaskCreatedChan:                 make(chan *cstaskmanager.ContractIncredibleSquaringTaskManagerNewTaskCreated),
-		newPriceUpdateTaskCreatedChan:      make(chan *cstaskmanager.ContractIncredibleSquaringTaskManagerPriceUpdateRequested),
+		newTaskCreatedChan:                 make(chan *cstaskmanager.ContractPriceAggregatorTaskManagerNewTaskCreated),
+		newPriceUpdateTaskCreatedChan:      make(chan *cstaskmanager.ContractPriceAggregatorTaskManagerPriceUpdateRequested),
 		credibleSquaringServiceManagerAddr: common.HexToAddress(c.AVSRegistryCoordinatorAddress),
 		operatorId:                         [32]byte{0}, // this is set below
 		priceFeedAdapter:                   priceFeedClient,
 		taskConsensusManager:               nil,
-		tasks:                              make(map[uint32]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTask),
+		tasks:                              make(map[uint32]cstaskmanager.IPriceAggregatorTaskManagerPriceUpdateTask),
 		taskResponses:                      taskResponses,
 		taskDigestQuorum:                   make(map[uint32]TaskDigestQuorum),
 	}
@@ -427,7 +427,7 @@ func (o *Operator) Start(ctx context.Context) error {
 	}
 }
 
-func (o *Operator) ProcessNewPriceUpdateCreatedLog(newPriceUpdateTaskCreatedLog *cstaskmanager.ContractIncredibleSquaringTaskManagerPriceUpdateRequested) error {
+func (o *Operator) ProcessNewPriceUpdateCreatedLog(newPriceUpdateTaskCreatedLog *cstaskmanager.ContractPriceAggregatorTaskManagerPriceUpdateRequested) error {
 	// If not leader ignore request
 	isLeader, _ := o.taskConsensusManager.IsLeader()
 
@@ -562,7 +562,7 @@ func (o *Operator) sendAggregatedTaskResponseToContract(blsAggServiceResp blsagg
 	// If quorum reached submit on chain
 	if len(taskSubmissions) >= int(task.MinNumOfOracleNetworks) {
 
-		var finalResponses []cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse
+		var finalResponses []cstaskmanager.IPriceAggregatorTaskManagerPriceUpdateTaskResponse
 		var finalStakesAndSignatures []cstaskmanager.IBLSSignatureCheckerNonSignerStakesAndSignature
 
 		for _, submission := range taskSubmissions {
@@ -740,10 +740,10 @@ func (o *Operator) onLeaderProcessTaskResponse(task PriceUpdateTaskResponse, w h
 	o.taskResponsesMu.Lock()
 
 	if _, ok := (o.taskResponses)[currentTaskIndex]; !ok {
-		(o.taskResponses)[currentTaskIndex] = make(map[sdktypes.TaskResponseDigest]cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse)
+		(o.taskResponses)[currentTaskIndex] = make(map[sdktypes.TaskResponseDigest]cstaskmanager.IPriceAggregatorTaskManagerPriceUpdateTaskResponse)
 	}
 	if _, ok := (o.taskResponses)[currentTaskIndex][taskResponseDigest]; !ok {
-		(o.taskResponses)[currentTaskIndex][taskResponseDigest] = cstaskmanager.IIncredibleSquaringTaskManagerPriceUpdateTaskResponse{
+		(o.taskResponses)[currentTaskIndex][taskResponseDigest] = cstaskmanager.IPriceAggregatorTaskManagerPriceUpdateTaskResponse{
 			Price:    uint32(task.Price),
 			Decimals: 18,
 			Source:   task.Source,
