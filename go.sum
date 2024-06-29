@@ -37,6 +37,8 @@ github.com/Robert-H-Leonard/eigenShift v0.0.10 h1:zR8pMmkHHE9RaqazZ3TryVnvNLt+vy
 github.com/Robert-H-Leonard/eigenShift v0.0.10/go.mod h1:PO3stjE/4JGKJxXSK2V82nD/mMcTDck3oXnazpbNvcU=
 github.com/Robert-H-Leonard/eigenShift v0.0.11 h1:8p/4Q+pk+FW8yeRVoVRy9AEav0s0eA66mKMWmsy+nWU=
 github.com/Robert-H-Leonard/eigenShift v0.0.11/go.mod h1:PO3stjE/4JGKJxXSK2V82nD/mMcTDck3oXnazpbNvcU=
+github.com/Robert-H-Leonard/eigenShift v0.0.12 h1:TbSCnGFPLYoL9+cKUbEK52bR6N9jitYHTKhMIFxK7E8=
+github.com/Robert-H-Leonard/eigenShift v0.0.12/go.mod h1:PO3stjE/4JGKJxXSK2V82nD/mMcTDck3oXnazpbNvcU=
 github.com/Shopify/goreferrer v0.0.0-20181106222321-ec9c9a553398/go.mod h1:a1uqRtAwp2Xwc6WNPJEufxJ7fx3npB4UV/JOLmbu5I0=
 github.com/StackExchange/wmi v1.2.1 h1:VIkavFPXSjcnS+O8yTq7NI32k0R5Aj+v39y29VYDOSA=
 github.com/StackExchange/wmi v1.2.1/go.mod h1:rcmrprowKIVzvc+NUiLncP2uuArMWLCbu9SBzvHz7e8=
