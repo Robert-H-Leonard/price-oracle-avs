@@ -40,6 +40,23 @@ The Price Oracle AVS keeps price feeds up to date by using the EigenShift protoc
 
  This occurs every 15 seconds, ensuring continuous and decentralized price feed updates. Another contract can read the aggregate prices from the task manager by querying the stored price data that was last submitted by the elected Aggregator, ensuring access to up-to-date and reliable price information.
 
+## Consuming aggregated price feeds
+We expose a method to fetch the latest aggregated price for a given feed. Current supported feeeds are `ETH/USD` and `BTC/USD`. If there has not been a feed update within the last 30 blocks the data is considered stale. You can call:
+
+```solidity
+IPriceAggregatorTaskManager.AggregatedPrice memory data = IPriceAggregatorTaskManager.fetchLatestAggregatedPrice(feedName)
+```
+
+Where `AggregatedPrice` looks like:
+
+```solidity
+struct AggregatedPrice {
+    uint32 price;
+    uint8 decimals;
+    uint32 lastBlockUpdated;
+    uint32 lastUpdatedTaskId; // Can be used to looks up submitted task data such as number of source used, number of operators submitted, etc
+}
+```
 
 ## Dependencies
 
